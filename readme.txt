@@ -1,5 +1,4 @@
 === Just Modern Images ===
-Contributors: soolecki
 Tags: webp, avif, images, performance, optimization
 Requires at least: 6.5
 Tested up to: 7.1
@@ -90,4 +89,3 @@ Not in this release. The first release intentionally covers attachment images re
 * Added complete responsive `picture` rendering with an unchanged original fallback.
 * Added four quality profiles and a compact status screen.
 * Added cleanup on attachment deletion and plugin uninstall.
-
