@@ -1,0 +1,472 @@
+<?php
+/**
+ * Modern image conversion.
+ *
+ * @package JustModernImages
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
+/**
+ * Creates validated companion files for one attachment at a time.
+ */
+final class JMI_Converter {
+
+	/** @var JMI_Quality_Profiles */
+	private $profiles;
+
+	/** @var JMI_Capabilities */
+	private $capabilities;
+
+	/** @var JMI_Source_Inventory */
+	private $inventory;
+
+	/** @var JMI_Manifest */
+	private $manifest;
+
+	/**
+	 * Set up the converter.
+	 *
+	 * @param JMI_Quality_Profiles $profiles     Quality profiles.
+	 * @param JMI_Capabilities     $capabilities Server capabilities.
+	 * @param JMI_Source_Inventory $inventory    Attachment source inventory.
+	 * @param JMI_Manifest         $manifest     Manifest storage.
+	 */
+	public function __construct( $profiles, $capabilities, $inventory, $manifest ) {
+		$this->profiles     = $profiles;
+		$this->capabilities = $capabilities;
+		$this->inventory    = $inventory;
+		$this->manifest     = $manifest;
+	}
+
+	/**
+	 * Convert every eligible source belonging to an attachment.
+	 *
+	 * @param int $attachment_id Attachment ID.
+	 * @return array<string, int|string>
+	 */
+	public function convert_attachment( $attachment_id ) {
+		$attachment_id = absint( $attachment_id );
+		$summary       = array(
+			'attachment_id' => $attachment_id,
+			'generated'     => 0,
+			'reused'        => 0,
+			'skipped'       => 0,
+			'failed'        => 0,
+			'last_reason'   => '',
+		);
+
+		if ( ! $attachment_id || ! wp_attachment_is_image( $attachment_id ) ) {
+			$summary['skipped']     = 1;
+			$summary['last_reason'] = 'not_an_image_attachment';
+			return $summary;
+		}
+
+		$sources = $this->inventory->for_attachment( $attachment_id );
+		if ( empty( $sources ) ) {
+			$summary['skipped']     = 1;
+			$summary['last_reason'] = 'no_local_sources';
+			return $summary;
+		}
+
+		$capabilities = $this->capabilities->get_all();
+		if ( $this->has_unknown_capability( $capabilities ) ) {
+			$capabilities = $this->capabilities->probe_all();
+		}
+
+		$previous           = $this->manifest->get( $attachment_id );
+		$generation_profile = $this->profiles->generation_profile();
+		$next               = $this->manifest->empty_manifest();
+		$next['generation_profile'] = $generation_profile;
+
+		foreach ( $sources as $source_key => $source ) {
+			$next['sources'][ $source_key ] = $this->source_manifest_data( $source );
+
+			foreach ( $this->capabilities->formats() as $mime_type => $extension ) {
+				$previous_variant = $this->previous_variant( $previous, $source_key, $mime_type );
+				$capability       = $capabilities[ $mime_type ] ?? array(
+					'state'  => 'unknown',
+					'reason' => 'not_checked',
+				);
+
+				if ( 'available' !== ( $capability['state'] ?? 'unknown' ) ) {
+					$variant = $this->outcome(
+						'skipped',
+						(string) ( $capability['reason'] ?? 'editor_unsupported' ),
+						$mime_type,
+						$generation_profile
+					);
+				} elseif ( $this->can_reuse( $previous, $previous_variant, $source, $generation_profile ) ) {
+					$variant = $previous_variant;
+					++$summary['reused'];
+					$next['sources'][ $source_key ]['variants'][ $mime_type ] = $variant;
+					continue;
+				} else {
+					$variant = $this->convert_variant( $source, $mime_type, $extension, $generation_profile );
+				}
+
+				if ( 'ready' === $variant['status'] ) {
+					++$summary['generated'];
+				} elseif ( 'failed' === $variant['status'] ) {
+					++$summary['failed'];
+					$summary['last_reason'] = $variant['reason'];
+					$variant = $this->keep_previous_on_refresh_failure(
+						$previous,
+						$previous_variant,
+						$source,
+						$variant
+					);
+				} else {
+					++$summary['skipped'];
+					$summary['last_reason'] = $variant['reason'];
+				}
+
+				$next['sources'][ $source_key ]['variants'][ $mime_type ] = $variant;
+			}
+		}
+
+		$this->manifest->save( $attachment_id, $next );
+		$this->manifest->delete_unreferenced_variants( $previous, $next, $attachment_id );
+
+		return $summary;
+	}
+
+	/**
+	 * Create one modern companion.
+	 *
+	 * @param array<string, mixed> $source             Source data.
+	 * @param string               $mime_type          Output MIME type.
+	 * @param string               $extension          Output extension.
+	 * @param string               $generation_profile Generation profile.
+	 * @return array<string, mixed>
+	 */
+	private function convert_variant( $source, $mime_type, $extension, $generation_profile ) {
+		if ( ! $this->has_memory_for( $source ) ) {
+			return $this->outcome( 'skipped', 'memory_budget', $mime_type, $generation_profile );
+		}
+
+		$target_path     = $source['path'] . '.' . $extension;
+		$relative_path   = $source['relative_path'] . '.' . $extension;
+		$target_directory = dirname( $target_path );
+		$temp_filename   = wp_unique_filename(
+			$target_directory,
+			'.' . wp_basename( $source['path'] ) . '.jmi-' . wp_generate_password( 8, false ) . '.' . $extension
+		);
+		$temp_path = $target_directory . DIRECTORY_SEPARATOR . $temp_filename;
+		$saved_path = $temp_path;
+
+		try {
+			$editor = wp_get_image_editor( $source['path'] );
+			if ( is_wp_error( $editor ) ) {
+				return $this->outcome( 'failed', 'editor_load_failed', $mime_type, $generation_profile );
+			}
+
+			$quality_set = $editor->set_quality( $this->profiles->quality_for( $mime_type ) );
+			if ( is_wp_error( $quality_set ) ) {
+				unset( $editor );
+				return $this->outcome( 'failed', 'quality_rejected', $mime_type, $generation_profile );
+			}
+
+			$saved = $editor->save( $temp_path, $mime_type );
+			unset( $editor );
+
+			if ( is_wp_error( $saved ) ) {
+				return $this->outcome( 'failed', 'encode_failed', $mime_type, $generation_profile );
+			}
+
+			$saved_path = ! empty( $saved['path'] ) ? $saved['path'] : $temp_path;
+			$validation = $this->validate_output( $saved_path, $mime_type, $source );
+
+			if ( 'ready' !== $validation['status'] ) {
+				return $this->outcome( $validation['status'], $validation['reason'], $mime_type, $generation_profile );
+			}
+
+			if ( ! $this->move_into_place( $saved_path, $target_path ) ) {
+				return $this->outcome( 'failed', 'finalize_failed', $mime_type, $generation_profile );
+			}
+
+			$variant = array(
+				'status'             => 'ready',
+				'reason'             => 'generated',
+				'mime_type'          => $mime_type,
+				'relative_path'      => $relative_path,
+				'width'              => (int) $validation['width'],
+				'height'             => (int) $validation['height'],
+				'bytes'              => (int) $validation['bytes'],
+				'generated_at'       => time(),
+				'generation_profile' => $generation_profile,
+			);
+
+			do_action( 'jmi_variant_generated', $variant, $source );
+
+			return $variant;
+		} catch ( Throwable $error ) {
+			return $this->outcome( 'failed', 'unexpected_editor_failure', $mime_type, $generation_profile );
+		} finally {
+			if ( file_exists( $saved_path ) && wp_normalize_path( $saved_path ) !== wp_normalize_path( $target_path ) ) {
+				wp_delete_file( $saved_path );
+			}
+			if ( file_exists( $temp_path ) && wp_normalize_path( $temp_path ) !== wp_normalize_path( $target_path ) ) {
+				wp_delete_file( $temp_path );
+			}
+		}
+	}
+
+	/**
+	 * Validate a temporary modern file.
+	 *
+	 * @param string               $path      Temporary path.
+	 * @param string               $mime_type Expected MIME type.
+	 * @param array<string, mixed> $source    Source data.
+	 * @return array<string, int|string>
+	 */
+	private function validate_output( $path, $mime_type, $source ) {
+		if ( ! is_readable( $path ) || wp_filesize( $path ) < 1 ) {
+			return array( 'status' => 'failed', 'reason' => 'empty_output' );
+		}
+
+		$image = getimagesize( $path );
+		if (
+			! is_array( $image ) ||
+			empty( $image['mime'] ) ||
+			$mime_type !== $image['mime'] ||
+			(int) $source['width'] !== (int) $image[0] ||
+			(int) $source['height'] !== (int) $image[1]
+		) {
+			return array( 'status' => 'failed', 'reason' => 'invalid_output' );
+		}
+
+		$decoder = wp_get_image_editor( $path );
+		if ( is_wp_error( $decoder ) ) {
+			return array( 'status' => 'failed', 'reason' => 'decode_failed' );
+		}
+		unset( $decoder );
+
+		$bytes = wp_filesize( $path );
+		if ( $bytes >= (int) $source['bytes'] ) {
+			return array( 'status' => 'skipped', 'reason' => 'not_smaller' );
+		}
+
+		return array(
+			'status' => 'ready',
+			'reason' => 'validated',
+			'width'  => (int) $image[0],
+			'height' => (int) $image[1],
+			'bytes'  => (int) $bytes,
+		);
+	}
+
+	/**
+	 * Move a validated file into its deterministic location.
+	 *
+	 * @param string $temporary_path Temporary file path.
+	 * @param string $target_path    Final file path.
+	 * @return bool
+	 */
+	private function move_into_place( $temporary_path, $target_path ) {
+		if ( ! file_exists( $target_path ) ) {
+			return @rename( $temporary_path, $target_path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		}
+
+		$backup_path = $target_path . '.jmi-backup-' . wp_generate_password( 8, false );
+		if ( ! @rename( $target_path, $backup_path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			return false;
+		}
+
+		if ( @rename( $temporary_path, $target_path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			wp_delete_file( $backup_path );
+			return true;
+		}
+
+		@rename( $backup_path, $target_path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		return false;
+	}
+
+	/**
+	 * Determine whether the source fits a conservative decoded-memory budget.
+	 *
+	 * @param array<string, mixed> $source Source data.
+	 * @return bool
+	 */
+	private function has_memory_for( $source ) {
+		$estimated = ( (int) $source['width'] * (int) $source['height'] * 8 ) + MB_IN_BYTES;
+		$estimated = (int) apply_filters( 'jmi_estimated_image_memory', $estimated, $source );
+		$limit     = wp_convert_hr_to_bytes( ini_get( 'memory_limit' ) );
+
+		if ( $limit <= 0 ) {
+			return true;
+		}
+
+		$available = max( 0, $limit - memory_get_usage( true ) - ( 16 * MB_IN_BYTES ) );
+
+		return $estimated <= $available;
+	}
+
+	/**
+	 * Determine whether an existing result is current and still valid.
+	 *
+	 * @param array<string, mixed>      $previous           Previous manifest.
+	 * @param array<string, mixed>|null $variant            Previous variant.
+	 * @param array<string, mixed>      $source             Current source.
+	 * @param string                    $generation_profile Generation profile.
+	 * @return bool
+	 */
+	private function can_reuse( $previous, $variant, $source, $generation_profile ) {
+		if ( ! is_array( $variant ) || 'ready' !== ( $variant['status'] ?? '' ) ) {
+			return false;
+		}
+
+		if ( $generation_profile !== ( $variant['generation_profile'] ?? '' ) ) {
+			return false;
+		}
+
+		$source_key = $source['size_name'];
+		if (
+			empty( $previous['sources'][ $source_key ]['signature'] ) ||
+			$source['signature'] !== $previous['sources'][ $source_key ]['signature']
+		) {
+			return false;
+		}
+
+		if ( empty( $variant['mime_type'] ) ) {
+			return false;
+		}
+
+		$path = $this->absolute_variant_path( $variant['relative_path'] ?? '' );
+
+		return $path && 'ready' === $this->validate_output( $path, $variant['mime_type'], $source )['status'];
+	}
+
+	/**
+	 * Keep a valid older-quality file if only its refresh failed.
+	 *
+	 * @param array<string, mixed>      $previous        Previous manifest.
+	 * @param array<string, mixed>|null $previous_variant Previous variant.
+	 * @param array<string, mixed>      $source          Current source.
+	 * @param array<string, mixed>      $failed          Failed outcome.
+	 * @return array<string, mixed>
+	 */
+	private function keep_previous_on_refresh_failure( $previous, $previous_variant, $source, $failed ) {
+		$source_key = $source['size_name'];
+		if (
+			! is_array( $previous_variant ) ||
+			'ready' !== ( $previous_variant['status'] ?? '' ) ||
+			empty( $previous['sources'][ $source_key ]['signature'] ) ||
+			$source['signature'] !== $previous['sources'][ $source_key ]['signature']
+		) {
+			return $failed;
+		}
+
+		if ( empty( $previous_variant['mime_type'] ) ) {
+			return $failed;
+		}
+
+		$path = $this->absolute_variant_path( $previous_variant['relative_path'] ?? '' );
+		if ( ! $path || 'ready' !== $this->validate_output( $path, $previous_variant['mime_type'], $source )['status'] ) {
+			return $failed;
+		}
+
+		$previous_variant['warning'] = $failed['reason'];
+
+		return $previous_variant;
+	}
+
+	/**
+	 * Return source fields safe to persist.
+	 *
+	 * @param array<string, mixed> $source Source data.
+	 * @return array<string, mixed>
+	 */
+	private function source_manifest_data( $source ) {
+		return array(
+			'size_name'     => $source['size_name'],
+			'relative_path' => $source['relative_path'],
+			'mime_type'     => $source['mime_type'],
+			'width'         => (int) $source['width'],
+			'height'        => (int) $source['height'],
+			'bytes'         => (int) $source['bytes'],
+			'modified'      => (int) $source['modified'],
+			'signature'     => $source['signature'],
+			'variants'      => array(),
+		);
+	}
+
+	/**
+	 * Return a previous variant.
+	 *
+	 * @param array<string, mixed> $manifest   Manifest.
+	 * @param string               $source_key Source key.
+	 * @param string               $mime_type  MIME type.
+	 * @return array<string, mixed>|null
+	 */
+	private function previous_variant( $manifest, $source_key, $mime_type ) {
+		if ( ! empty( $manifest['sources'][ $source_key ]['variants'][ $mime_type ] ) ) {
+			return $manifest['sources'][ $source_key ]['variants'][ $mime_type ];
+		}
+
+		return null;
+	}
+
+	/**
+	 * Build a non-file outcome.
+	 *
+	 * @param string $status             Outcome status.
+	 * @param string $reason             Reason code.
+	 * @param string $mime_type          Output MIME type.
+	 * @param string $generation_profile Generation profile.
+	 * @return array<string, mixed>
+	 */
+	private function outcome( $status, $reason, $mime_type, $generation_profile ) {
+		return array(
+			'status'             => $status,
+			'reason'             => $reason,
+			'mime_type'          => $mime_type,
+			'generation_profile' => $generation_profile,
+			'checked_at'         => time(),
+		);
+	}
+
+	/**
+	 * Determine whether capability information needs a real probe.
+	 *
+	 * @param array<string, array<string, mixed>> $capabilities Capability data.
+	 * @return bool
+	 */
+	private function has_unknown_capability( $capabilities ) {
+		foreach ( $this->capabilities->formats() as $mime_type => $extension ) {
+			if ( 'unknown' === ( $capabilities[ $mime_type ]['state'] ?? 'unknown' ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Resolve a plugin variant inside the uploads directory.
+	 *
+	 * @param string $relative_path Relative upload path.
+	 * @return string|false
+	 */
+	private function absolute_variant_path( $relative_path ) {
+		if (
+			! is_string( $relative_path ) ||
+			'' === $relative_path ||
+			preg_match( '#(^|/)\.\.(/|$)#', wp_normalize_path( $relative_path ) )
+		) {
+			return false;
+		}
+
+		$uploads = wp_upload_dir();
+		if ( ! empty( $uploads['error'] ) || empty( $uploads['basedir'] ) ) {
+			return false;
+		}
+
+		$base = trailingslashit( wp_normalize_path( $uploads['basedir'] ) );
+		$path = wp_normalize_path( $uploads['basedir'] . '/' . ltrim( $relative_path, '/' ) );
+
+		return 0 === strpos( $path, $base ) ? $path : false;
+	}
+}

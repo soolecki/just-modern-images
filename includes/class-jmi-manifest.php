@@ -108,6 +108,69 @@ final class JMI_Manifest {
 	}
 
 	/**
+	 * Remove files that are no longer referenced after a successful rebuild.
+	 *
+	 * @param array<string, mixed> $previous      Previous manifest.
+	 * @param array<string, mixed> $next          New manifest.
+	 * @param int                  $attachment_id Attachment ID.
+	 * @return int Number of deleted files.
+	 */
+	public function delete_unreferenced_variants( $previous, $next, $attachment_id ) {
+		$previous_paths = $this->ready_paths( $previous );
+		$next_paths     = $this->ready_paths( $next );
+		$stale_paths    = array_diff_key( $previous_paths, $next_paths );
+		$deleted        = 0;
+
+		foreach ( array_keys( $stale_paths ) as $relative_path ) {
+			$path = $this->resolve_variant_path( $relative_path );
+			if ( $path && file_exists( $path ) ) {
+				wp_delete_file( $path );
+				if ( ! file_exists( $path ) ) {
+					++$deleted;
+				}
+			}
+		}
+
+		if ( $deleted ) {
+			do_action( 'jmi_variants_deleted', $attachment_id, $deleted );
+		}
+
+		return $deleted;
+	}
+
+	/**
+	 * Return ready paths from a manifest as a set.
+	 *
+	 * @param mixed $manifest Manifest data.
+	 * @return array<string, bool>
+	 */
+	private function ready_paths( $manifest ) {
+		$paths = array();
+
+		if ( ! is_array( $manifest ) || empty( $manifest['sources'] ) || ! is_array( $manifest['sources'] ) ) {
+			return $paths;
+		}
+
+		foreach ( $manifest['sources'] as $source ) {
+			if ( empty( $source['variants'] ) || ! is_array( $source['variants'] ) ) {
+				continue;
+			}
+
+			foreach ( $source['variants'] as $variant ) {
+				if (
+					is_array( $variant ) &&
+					'ready' === ( $variant['status'] ?? '' ) &&
+					! empty( $variant['relative_path'] )
+				) {
+					$paths[ $variant['relative_path'] ] = true;
+				}
+			}
+		}
+
+		return $paths;
+	}
+
+	/**
 	 * Resolve a recorded relative path, restricted to modern files in uploads.
 	 *
 	 * @param mixed $relative_path Relative upload path.
