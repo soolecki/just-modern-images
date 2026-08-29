@@ -57,6 +57,19 @@ final class RendererTest extends TestCase {
 		$this->assertStringNotContainsString( 'photo.jpg.avif', $result );
 	}
 
+	public function test_it_omits_a_format_when_its_responsive_set_is_incomplete(): void {
+		$manifest = $this->manifest();
+		unset( $manifest['sources']['full']['variants']['image/avif'] );
+		$GLOBALS['jmi_test_manifests'][10] = $manifest;
+		$renderer = new JMI_Renderer( new JMI_Manifest() );
+		$html     = '<img src="https://example.test/wp-content/uploads/2026/08/photo-300x200.jpg" srcset="https://example.test/wp-content/uploads/2026/08/photo-300x200.jpg 300w, https://example.test/wp-content/uploads/2026/08/photo.jpg 1200w">';
+
+		$result = $renderer->filter_content_image( $html, 'the_content', 10 );
+
+		$this->assertStringNotContainsString( 'type="image/avif"', $result );
+		$this->assertStringContainsString( 'type="image/webp"', $result );
+	}
+
 	private function manifest(): array {
 		return array(
 			'schema'             => 1,
@@ -89,4 +102,3 @@ final class RendererTest extends TestCase {
 		);
 	}
 }
-

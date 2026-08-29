@@ -137,6 +137,6 @@ class WP_HTML_Tag_Processor {
 }
 
 require_once dirname( __DIR__ ) . '/includes/class-jmi-quality-profiles.php';
+require_once dirname( __DIR__ ) . '/includes/class-jmi-error-trap.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-manifest.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-renderer.php';
-

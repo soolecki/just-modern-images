@@ -101,8 +101,9 @@ final class JMI_Converter {
 			$next['sources'][ $source_key ] = $this->source_manifest_data( $source );
 
 			foreach ( $this->capabilities->formats() as $mime_type => $extension ) {
-				$previous_variant = $this->previous_variant( $previous, $source_key, $mime_type );
-				$capability       = $capabilities[ $mime_type ] ?? array(
+				$current_capabilities = $this->capabilities->get_all();
+				$previous_variant     = $this->previous_variant( $previous, $source_key, $mime_type );
+				$capability           = $current_capabilities[ $mime_type ] ?? array(
 					'state'  => 'unknown',
 					'reason' => 'not_checked',
 				);
@@ -128,7 +129,8 @@ final class JMI_Converter {
 				} elseif ( 'failed' === $variant['status'] ) {
 					++$summary['failed'];
 					$summary['last_reason'] = $variant['reason'];
-					$variant                = $this->keep_previous_on_refresh_failure(
+					$this->capabilities->record_failure( $mime_type, $variant['reason'] );
+					$variant = $this->keep_previous_on_refresh_failure(
 						$previous,
 						$previous_variant,
 						$source,
@@ -185,8 +187,18 @@ final class JMI_Converter {
 				return $this->outcome( 'failed', 'quality_rejected', $mime_type, $generation_profile );
 			}
 
-			$saved = $editor->save( $temp_path, $mime_type );
+			$warning = '';
+			$saved   = JMI_Error_Trap::run(
+				static function () use ( $editor, $temp_path, $mime_type ) {
+					return $editor->save( $temp_path, $mime_type );
+				},
+				$warning
+			);
 			unset( $editor );
+
+			if ( '' !== $warning ) {
+				return $this->outcome( 'failed', 'encode_warning', $mime_type, $generation_profile );
+			}
 
 			if ( is_wp_error( $saved ) ) {
 				return $this->outcome( 'failed', 'encode_failed', $mime_type, $generation_profile );

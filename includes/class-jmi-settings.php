@@ -238,6 +238,10 @@ final class JMI_Settings {
 			return __( 'Unavailable — this format will be skipped', 'just-modern-images' );
 		}
 
+		if ( 'temporarily_disabled' === $state ) {
+			return __( 'Temporarily paused after repeated encoder failures', 'just-modern-images' );
+		}
+
 		return __( 'Waiting for a capability check', 'just-modern-images' );
 	}
 }

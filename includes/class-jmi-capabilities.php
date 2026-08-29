@@ -14,8 +14,12 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class JMI_Capabilities {
 
-	const OPTION_NAME   = 'jmi_capabilities';
-	const PROBE_VERSION = 1;
+	const OPTION_NAME    = 'jmi_capabilities';
+	const HEALTH_OPTION  = 'jmi_format_health';
+	const PROBE_VERSION  = 1;
+	const FAILURE_LIMIT  = 3;
+	const FAILURE_WINDOW = 600;
+	const PAUSE_SECONDS  = 3600;
 
 	/**
 	 * MIME types managed by the plugin.
@@ -47,7 +51,7 @@ final class JMI_Capabilities {
 			return $this->unknown_results();
 		}
 
-		return $stored['formats'];
+		return $this->apply_health( $stored['formats'] );
 	}
 
 	/**
@@ -69,6 +73,7 @@ final class JMI_Capabilities {
 	 */
 	public function probe_all() {
 		$results = array();
+		delete_option( self::HEALTH_OPTION );
 
 		foreach ( $this->formats() as $mime_type => $extension ) {
 			$results[ $mime_type ] = $this->probe_format( $mime_type, $extension );
@@ -94,6 +99,49 @@ final class JMI_Capabilities {
 	 */
 	public function invalidate() {
 		delete_option( self::OPTION_NAME );
+		delete_option( self::HEALTH_OPTION );
+	}
+
+	/**
+	 * Record an encoder failure and temporarily pause an unstable format.
+	 *
+	 * @param string $mime_type Output MIME type.
+	 * @param string $reason    Failure reason.
+	 * @return void
+	 */
+	public function record_failure( $mime_type, $reason ) {
+		$encoder_failures = array(
+			'decode_failed',
+			'empty_output',
+			'encode_failed',
+			'encode_warning',
+			'invalid_output',
+			'unexpected_editor_failure',
+		);
+
+		if ( ! isset( $this->formats()[ $mime_type ] ) || ! in_array( $reason, $encoder_failures, true ) ) {
+			return;
+		}
+
+		$now    = time();
+		$health = get_option( self::HEALTH_OPTION, array() );
+		$health = is_array( $health ) ? $health : array();
+		$format = isset( $health[ $mime_type ] ) && is_array( $health[ $mime_type ] ) ? $health[ $mime_type ] : array();
+
+		if ( empty( $format['last_failure'] ) || (int) $format['last_failure'] < $now - self::FAILURE_WINDOW ) {
+			$format['failures'] = 0;
+		}
+
+		$format['failures']     = (int) ( $format['failures'] ?? 0 ) + 1;
+		$format['last_failure'] = $now;
+		$format['last_reason']  = sanitize_key( $reason );
+
+		if ( $format['failures'] >= self::FAILURE_LIMIT ) {
+			$format['paused_until'] = $now + self::PAUSE_SECONDS;
+		}
+
+		$health[ $mime_type ] = $format;
+		update_option( self::HEALTH_OPTION, $health, false );
 	}
 
 	/**
@@ -135,8 +183,18 @@ final class JMI_Capabilities {
 			}
 
 			$editor->set_quality( 75 );
-			$saved = $editor->save( $target_path, $mime_type );
+			$warning = '';
+			$saved   = JMI_Error_Trap::run(
+				static function () use ( $editor, $target_path, $mime_type ) {
+					return $editor->save( $target_path, $mime_type );
+				},
+				$warning
+			);
 			unset( $editor );
+
+			if ( '' !== $warning ) {
+				return $this->result( 'unavailable', 'encode_warning' );
+			}
 
 			if ( is_wp_error( $saved ) ) {
 				return $this->result( 'unavailable', 'encode_failed' );
@@ -179,6 +237,34 @@ final class JMI_Capabilities {
 		}
 
 		return $results;
+	}
+
+	/**
+	 * Overlay temporary circuit-breaker state on verified capabilities.
+	 *
+	 * @param array<string, array<string, mixed>> $formats Verified formats.
+	 * @return array<string, array<string, mixed>>
+	 */
+	private function apply_health( $formats ) {
+		$health = get_option( self::HEALTH_OPTION, array() );
+		if ( ! is_array( $health ) ) {
+			return $formats;
+		}
+
+		foreach ( $health as $mime_type => $format ) {
+			if (
+				isset( $formats[ $mime_type ] ) &&
+				is_array( $format ) &&
+				! empty( $format['paused_until'] ) &&
+				(int) $format['paused_until'] > time()
+			) {
+				$formats[ $mime_type ]['state']        = 'temporarily_disabled';
+				$formats[ $mime_type ]['reason']       = 'encoder_circuit_breaker';
+				$formats[ $mime_type ]['paused_until'] = (int) $format['paused_until'];
+			}
+		}
+
+		return $formats;
 	}
 
 	/**

@@ -182,7 +182,7 @@ final class JMI_Renderer {
 		foreach ( $raw_candidates as $candidate ) {
 			$source_key = $this->match_source_key( $candidate['url'], $sources );
 			if ( null === $source_key ) {
-				continue;
+				return array();
 			}
 
 			$matched[] = array(
@@ -242,12 +242,12 @@ final class JMI_Renderer {
 				'ready' !== ( $variant['status'] ?? '' ) ||
 				empty( $variant['relative_path'] )
 			) {
-				continue;
+				return '';
 			}
 
 			$url = $this->variant_url( $variant['relative_path'] );
 			if ( ! $url ) {
-				continue;
+				return '';
 			}
 
 			$item = $url;
