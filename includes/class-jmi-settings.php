@@ -39,16 +39,25 @@ final class JMI_Settings {
 	private $queue;
 
 	/**
+	 * Queryable Media Library status.
+	 *
+	 * @var JMI_Media_Status
+	 */
+	private $media_status;
+
+	/**
 	 * Set up the settings screen.
 	 *
 	 * @param JMI_Quality_Profiles $profiles     Quality profiles.
 	 * @param JMI_Capabilities     $capabilities Server capabilities.
 	 * @param JMI_Queue            $queue        Background queue.
+	 * @param JMI_Media_Status     $media_status Media Library status.
 	 */
-	public function __construct( $profiles, $capabilities, $queue ) {
+	public function __construct( $profiles, $capabilities, $queue, $media_status ) {
 		$this->profiles     = $profiles;
 		$this->capabilities = $capabilities;
 		$this->queue        = $queue;
+		$this->media_status = $media_status;
 	}
 
 	/**
@@ -60,6 +69,7 @@ final class JMI_Settings {
 		add_action( 'admin_menu', array( $this, 'add_page' ) );
 		add_action( 'admin_init', array( $this, 'register_setting' ) );
 		add_action( 'admin_post_jmi_rebuild', array( $this, 'handle_rebuild' ) );
+		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_styles' ) );
 		add_action( 'update_option_' . JMI_Quality_Profiles::OPTION_NAME, array( $this, 'handle_quality_change' ), 10, 2 );
 		add_filter( 'plugin_action_links_' . plugin_basename( JMI_PLUGIN_FILE ), array( $this, 'add_action_link' ) );
 	}
@@ -109,68 +119,95 @@ final class JMI_Settings {
 		$selected     = $this->profiles->selected_key();
 		$capabilities = $this->capabilities->get_all();
 		$status       = $this->queue->status();
+		$stats        = $this->media_status->library_stats( $this->profiles->generation_profile() );
+		$profiles     = $this->profiles->all();
+		$profile      = $profiles[ $selected ];
+		$ready_pct    = $stats['total'] ? (int) round( ( $stats['ready'] / $stats['total'] ) * 100 ) : 0;
+		$reviewed_pct = $stats['total'] ? (int) round( ( $stats['reviewed'] / $stats['total'] ) * 100 ) : 0;
 		?>
-		<div class="wrap">
-			<h1><?php esc_html_e( 'Just Modern Images', 'just-modern-images' ); ?></h1>
-			<p><?php esc_html_e( 'Modern image formats are generated in the background. Original files always remain available.', 'just-modern-images' ); ?></p>
+		<div class="wrap jmi-admin">
+			<div class="jmi-heading">
+				<div>
+					<h1><?php esc_html_e( 'Just Modern Images', 'just-modern-images' ); ?></h1>
+					<p><?php esc_html_e( 'Modern formats are generated automatically. Your original files always remain untouched.', 'just-modern-images' ); ?></p>
+				</div>
+				<span class="jmi-version"><?php echo esc_html( 'v' . JMI_VERSION ); ?></span>
+			</div>
 
 			<?php if ( isset( $_GET['jmi-rebuild'] ) ) : // phpcs:ignore WordPress.Security.NonceVerification.Recommended ?>
 				<div class="notice notice-success is-dismissible"><p><?php esc_html_e( 'The Media Library scan has been queued.', 'just-modern-images' ); ?></p></div>
 			<?php endif; ?>
 
-			<form action="options.php" method="post">
-				<?php settings_fields( self::SETTINGS_GROUP ); ?>
-				<h2><?php esc_html_e( 'Image quality', 'just-modern-images' ); ?></h2>
-				<fieldset>
-					<?php foreach ( $this->profiles->all() as $key => $profile ) : ?>
-						<p>
-							<label>
-								<input type="radio" name="<?php echo esc_attr( JMI_Quality_Profiles::OPTION_NAME ); ?>" value="<?php echo esc_attr( $key ); ?>" <?php checked( $selected, $key ); ?>>
-								<strong><?php echo esc_html( $profile['label'] ); ?></strong>
-								&mdash; <?php echo esc_html( $profile['description'] ); ?>
-							</label>
-						</p>
-					<?php endforeach; ?>
-				</fieldset>
-				<?php submit_button(); ?>
-			</form>
+			<section class="jmi-overview">
+				<div class="jmi-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="<?php echo esc_attr( $ready_pct ); ?>" style="--jmi-progress: <?php echo esc_attr( $ready_pct ); ?>%">
+					<div><strong><?php echo esc_html( $ready_pct . '%' ); ?></strong><span><?php esc_html_e( 'ready', 'just-modern-images' ); ?></span></div>
+				</div>
+				<div class="jmi-overview-copy">
+					<h2><?php esc_html_e( 'Media Library', 'just-modern-images' ); ?></h2>
+					<?php /* translators: 1: ready images, 2: all eligible images. */ ?>
+					<p><?php echo esc_html( sprintf( __( '%1$s of %2$s eligible images are fully ready.', 'just-modern-images' ), number_format_i18n( $stats['ready'] ), number_format_i18n( $stats['total'] ) ) ); ?></p>
+					<div class="jmi-linear-progress"><span style="width: <?php echo esc_attr( $reviewed_pct ); ?>%"></span></div>
+					<?php /* translators: %s: percentage of the Media Library reviewed. */ ?>
+					<small><?php echo esc_html( sprintf( __( 'Library reviewed: %s%%', 'just-modern-images' ), $reviewed_pct ) ); ?></small>
+				</div>
+			</section>
 
-			<hr>
-			<h2><?php esc_html_e( 'Status', 'just-modern-images' ); ?></h2>
-			<table class="widefat striped" style="max-width: 760px">
-				<tbody>
-					<tr>
-						<th scope="row"><?php esc_html_e( 'AVIF', 'just-modern-images' ); ?></th>
-						<td><?php echo esc_html( $this->capability_label( $capabilities['image/avif'] ?? array() ) ); ?></td>
-					</tr>
-					<tr>
-						<th scope="row"><?php esc_html_e( 'WebP', 'just-modern-images' ); ?></th>
-						<td><?php echo esc_html( $this->capability_label( $capabilities['image/webp'] ?? array() ) ); ?></td>
-					</tr>
-					<tr>
-						<th scope="row"><?php esc_html_e( 'Media Library scan', 'just-modern-images' ); ?></th>
-						<td><?php echo esc_html( ucfirst( (string) $status['status'] ) ); ?></td>
-					</tr>
-					<tr>
-						<th scope="row"><?php esc_html_e( 'Attachments processed', 'just-modern-images' ); ?></th>
-						<td><?php echo esc_html( number_format_i18n( (int) $status['processed'] ) ); ?></td>
-					</tr>
-					<tr>
-						<th scope="row"><?php esc_html_e( 'Files generated', 'just-modern-images' ); ?></th>
-						<td><?php echo esc_html( number_format_i18n( (int) $status['generated'] ) ); ?></td>
-					</tr>
-					<tr>
-						<th scope="row"><?php esc_html_e( 'Skipped / failed', 'just-modern-images' ); ?></th>
-						<td><?php echo esc_html( number_format_i18n( (int) $status['skipped'] ) . ' / ' . number_format_i18n( (int) $status['failed'] ) ); ?></td>
-					</tr>
-				</tbody>
-			</table>
+			<div class="jmi-stat-grid">
+				<div class="jmi-stat"><span><?php esc_html_e( 'Ready', 'just-modern-images' ); ?></span><strong><?php echo esc_html( number_format_i18n( $stats['ready'] ) ); ?></strong></div>
+				<div class="jmi-stat"><span><?php esc_html_e( 'Partly ready', 'just-modern-images' ); ?></span><strong><?php echo esc_html( number_format_i18n( $stats['partial'] ) ); ?></strong></div>
+				<div class="jmi-stat"><span><?php esc_html_e( 'Waiting', 'just-modern-images' ); ?></span><strong><?php echo esc_html( number_format_i18n( $stats['pending'] + $stats['queued'] + $stats['processing'] + $stats['stale'] ) ); ?></strong></div>
+				<div class="jmi-stat jmi-stat--danger"><span><?php esc_html_e( 'Needs attention', 'just-modern-images' ); ?></span><strong><?php echo esc_html( number_format_i18n( $stats['failed'] ) ); ?></strong></div>
+			</div>
 
-			<form action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" method="post">
-				<input type="hidden" name="action" value="jmi_rebuild">
-				<?php wp_nonce_field( 'jmi_rebuild_media_library' ); ?>
-				<?php submit_button( __( 'Scan Media Library again', 'just-modern-images' ), 'secondary' ); ?>
-			</form>
+			<div class="jmi-panel-grid">
+				<section class="jmi-panel">
+					<h2><?php esc_html_e( 'Image quality', 'just-modern-images' ); ?></h2>
+					<form action="options.php" method="post">
+						<?php settings_fields( self::SETTINGS_GROUP ); ?>
+						<label class="jmi-field-label" for="jmi-quality-profile"><?php esc_html_e( 'Quality profile', 'just-modern-images' ); ?></label>
+						<select class="regular-text" id="jmi-quality-profile" name="<?php echo esc_attr( JMI_Quality_Profiles::OPTION_NAME ); ?>">
+							<?php foreach ( $profiles as $key => $option ) : ?>
+								<option value="<?php echo esc_attr( $key ); ?>" <?php selected( $selected, $key ); ?>><?php echo esc_html( $option['label'] ); ?></option>
+							<?php endforeach; ?>
+						</select>
+						<p class="description"><?php echo esc_html( $profile['description'] ); ?></p>
+						<p class="description"><?php esc_html_e( 'Changing quality refreshes the library in the background. Last known good variants remain active until replacements are ready.', 'just-modern-images' ); ?></p>
+						<?php submit_button( __( 'Save quality', 'just-modern-images' ) ); ?>
+					</form>
+				</section>
+
+				<section class="jmi-panel">
+					<h2><?php esc_html_e( 'Server formats', 'just-modern-images' ); ?></h2>
+					<div class="jmi-capability">
+						<span class="jmi-format-icon">A</span>
+						<div><strong>AVIF</strong><span><?php echo esc_html( $this->capability_label( $capabilities['image/avif'] ?? array() ) ); ?></span></div>
+					</div>
+					<div class="jmi-capability">
+						<span class="jmi-format-icon">W</span>
+						<div><strong>WebP</strong><span><?php echo esc_html( $this->capability_label( $capabilities['image/webp'] ?? array() ) ); ?></span></div>
+					</div>
+				</section>
+
+				<section class="jmi-panel">
+					<h2><?php esc_html_e( 'Background processing', 'just-modern-images' ); ?></h2>
+					<dl class="jmi-details">
+						<div><dt><?php esc_html_e( 'Library scan', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->queue_status_label( $status['status'] ) ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Attachments processed', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( number_format_i18n( (int) $status['processed'] ) ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Files generated', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( number_format_i18n( (int) $status['generated'] ) ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Last activity', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->last_activity_label( $status['last_update'] ) ); ?></dd></div>
+					</dl>
+					<?php if ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON ) : ?>
+						<p class="jmi-warning"><?php esc_html_e( 'Built-in WP-Cron is disabled. An external cron runner must call WordPress regularly.', 'just-modern-images' ); ?></p>
+					<?php endif; ?>
+					<form action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" method="post">
+						<input type="hidden" name="action" value="jmi_rebuild">
+						<?php wp_nonce_field( 'jmi_rebuild_media_library' ); ?>
+						<?php submit_button( __( 'Scan Media Library again', 'just-modern-images' ), 'secondary', 'submit', false ); ?>
+					</form>
+				</section>
+			</div>
+
+			<p class="jmi-safety-note"><span aria-hidden="true">✓</span><?php esc_html_e( 'Original JPEG and PNG files are never replaced or deleted.', 'just-modern-images' ); ?></p>
 		</div>
 		<?php
 	}
@@ -222,6 +259,20 @@ final class JMI_Settings {
 	}
 
 	/**
+	 * Load the settings screen styles.
+	 *
+	 * @param string $hook_suffix Current admin page.
+	 * @return void
+	 */
+	public function enqueue_styles( $hook_suffix ) {
+		if ( 'settings_page_' . self::PAGE_SLUG !== $hook_suffix ) {
+			return;
+		}
+
+		wp_enqueue_style( 'jmi-admin', plugins_url( 'assets/admin.css', JMI_PLUGIN_FILE ), array(), JMI_VERSION );
+	}
+
+	/**
 	 * Convert a capability state into a short human-readable label.
 	 *
 	 * @param array<string, mixed> $capability Capability data.
@@ -243,5 +294,42 @@ final class JMI_Settings {
 		}
 
 		return __( 'Waiting for a capability check', 'just-modern-images' );
+	}
+
+	/**
+	 * Return a translated queue state.
+	 *
+	 * @param mixed $state Queue state.
+	 * @return string
+	 */
+	private function queue_status_label( $state ) {
+		$labels = array(
+			'idle'     => __( 'Waiting', 'just-modern-images' ),
+			'queued'   => __( 'Queued', 'just-modern-images' ),
+			'running'  => __( 'Scanning', 'just-modern-images' ),
+			'complete' => __( 'Scan complete', 'just-modern-images' ),
+		);
+		$state  = sanitize_key( $state );
+
+		return $labels[ $state ] ?? $labels['idle'];
+	}
+
+	/**
+	 * Return a concise last-activity description.
+	 *
+	 * @param mixed $timestamp Activity timestamp.
+	 * @return string
+	 */
+	private function last_activity_label( $timestamp ) {
+		$timestamp = absint( $timestamp );
+		if ( ! $timestamp ) {
+			return __( 'No activity yet', 'just-modern-images' );
+		}
+
+		return sprintf(
+			/* translators: %s: human-readable time difference, such as "2 minutes". */
+			__( '%s ago', 'just-modern-images' ),
+			human_time_diff( $timestamp, time() )
+		);
 	}
 }

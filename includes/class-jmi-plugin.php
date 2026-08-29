@@ -36,6 +36,13 @@ final class JMI_Plugin {
 	private $manifest;
 
 	/**
+	 * Per-attachment status storage.
+	 *
+	 * @var JMI_Media_Status
+	 */
+	private $media_status;
+
+	/**
 	 * Return the plugin instance.
 	 *
 	 * @return JMI_Plugin
@@ -52,18 +59,21 @@ final class JMI_Plugin {
 	 * Initialize plugin services.
 	 */
 	private function __construct() {
-		$profiles       = new JMI_Quality_Profiles();
-		$capabilities   = new JMI_Capabilities();
-		$this->manifest = new JMI_Manifest();
-		$inventory      = new JMI_Source_Inventory();
-		$converter      = new JMI_Converter( $profiles, $capabilities, $inventory, $this->manifest );
-		$this->queue    = new JMI_Queue( $converter );
-		$renderer       = new JMI_Renderer( $this->manifest );
-		$settings       = new JMI_Settings( $profiles, $capabilities, $this->queue );
+		$profiles           = new JMI_Quality_Profiles();
+		$capabilities       = new JMI_Capabilities();
+		$this->manifest     = new JMI_Manifest();
+		$this->media_status = new JMI_Media_Status();
+		$inventory          = new JMI_Source_Inventory();
+		$converter          = new JMI_Converter( $profiles, $capabilities, $inventory, $this->manifest );
+		$this->queue        = new JMI_Queue( $converter, $profiles, $this->media_status );
+		$renderer           = new JMI_Renderer( $this->manifest, $this->queue );
+		$settings           = new JMI_Settings( $profiles, $capabilities, $this->queue, $this->media_status );
+		$media_admin        = new JMI_Media_Admin( $this->media_status, $this->manifest, $this->queue, $profiles, $capabilities );
 
 		$this->queue->register();
 		$renderer->register();
 		$settings->register();
+		$media_admin->register();
 
 		add_action( 'delete_attachment', array( $this, 'delete_attachment_variants' ), 10, 1 );
 	}
@@ -83,8 +93,11 @@ final class JMI_Plugin {
 
 		$profiles = new JMI_Quality_Profiles();
 		$manifest = new JMI_Manifest();
+		$status   = new JMI_Media_Status();
 		$queue    = new JMI_Queue(
-			new JMI_Converter( $profiles, $capabilities, new JMI_Source_Inventory(), $manifest )
+			new JMI_Converter( $profiles, $capabilities, new JMI_Source_Inventory(), $manifest ),
+			$profiles,
+			$status
 		);
 		$queue->start_scan( 'activation' );
 
@@ -107,6 +120,8 @@ final class JMI_Plugin {
 	 * @return void
 	 */
 	public function delete_attachment_variants( $attachment_id ) {
-		$this->manifest->delete_variants( absint( $attachment_id ) );
+		$attachment_id = absint( $attachment_id );
+		$this->manifest->delete_variants( $attachment_id );
+		$this->media_status->delete( $attachment_id );
 	}
 }

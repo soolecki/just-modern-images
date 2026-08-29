@@ -4,9 +4,14 @@
  */
 
 define( 'ABSPATH', __DIR__ . '/wordpress/' );
+define( 'MINUTE_IN_SECONDS', 60 );
+define( 'DAY_IN_SECONDS', 86400 );
 
 $GLOBALS['jmi_test_options']   = array();
 $GLOBALS['jmi_test_manifests'] = array();
+$GLOBALS['jmi_test_post_meta'] = array();
+$GLOBALS['jmi_test_mime_types'] = array();
+$GLOBALS['jmi_test_scheduled'] = array();
 
 function __( $text ) {
 	return $text;
@@ -21,7 +26,24 @@ function get_option( $name, $default = false ) {
 }
 
 function get_post_meta( $attachment_id, $key, $single = false ) {
-	return $GLOBALS['jmi_test_manifests'][ $attachment_id ] ?? '';
+	unset( $single );
+	if ( JMI_Manifest::META_KEY === $key ) {
+		return $GLOBALS['jmi_test_manifests'][ $attachment_id ] ?? '';
+	}
+
+	return $GLOBALS['jmi_test_post_meta'][ $attachment_id ][ $key ] ?? '';
+}
+
+function update_post_meta( $attachment_id, $key, $value ) {
+	$GLOBALS['jmi_test_post_meta'][ $attachment_id ][ $key ] = $value;
+
+	return true;
+}
+
+function delete_post_meta( $attachment_id, $key ) {
+	unset( $GLOBALS['jmi_test_post_meta'][ $attachment_id ][ $key ] );
+
+	return true;
 }
 
 function absint( $value ) {
@@ -30,8 +52,53 @@ function absint( $value ) {
 
 function add_filter() {}
 
+function add_action() {}
+
 function apply_filters( $hook, $value ) {
+	unset( $hook );
 	return $value;
+}
+
+function update_option( $name, $value ) {
+	$GLOBALS['jmi_test_options'][ $name ] = $value;
+
+	return true;
+}
+
+function get_post_mime_type( $attachment_id ) {
+	return $GLOBALS['jmi_test_mime_types'][ $attachment_id ] ?? '';
+}
+
+function wp_next_scheduled( $hook, $args = array() ) {
+	foreach ( $GLOBALS['jmi_test_scheduled'] as $event ) {
+		if ( $hook === $event['hook'] && $args === $event['args'] ) {
+			return $event['timestamp'];
+		}
+	}
+
+	return false;
+}
+
+function wp_schedule_single_event( $timestamp, $hook, $args = array() ) {
+	$GLOBALS['jmi_test_scheduled'][] = array(
+		'timestamp' => $timestamp,
+		'hook'      => $hook,
+		'args'      => $args,
+	);
+
+	return true;
+}
+
+function wp_unschedule_event( $timestamp, $hook, $args = array() ) {
+	foreach ( $GLOBALS['jmi_test_scheduled'] as $index => $event ) {
+		if ( $timestamp === $event['timestamp'] && $hook === $event['hook'] && $args === $event['args'] ) {
+			unset( $GLOBALS['jmi_test_scheduled'][ $index ] );
+			$GLOBALS['jmi_test_scheduled'] = array_values( $GLOBALS['jmi_test_scheduled'] );
+			return true;
+		}
+	}
+
+	return false;
 }
 
 function is_admin() {
@@ -139,4 +206,6 @@ class WP_HTML_Tag_Processor {
 require_once dirname( __DIR__ ) . '/includes/class-jmi-quality-profiles.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-error-trap.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-manifest.php';
+require_once dirname( __DIR__ ) . '/includes/class-jmi-media-status.php';
+require_once dirname( __DIR__ ) . '/includes/class-jmi-queue.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-renderer.php';

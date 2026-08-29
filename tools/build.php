@@ -32,6 +32,12 @@ foreach ( glob( $root . '/includes/*.php' ) as $include_file ) {
 	$files[] = 'includes/' . basename( $include_file );
 }
 
+foreach ( glob( $root . '/assets/*' ) as $asset_file ) {
+	if ( is_file( $asset_file ) ) {
+		$files[] = 'assets/' . basename( $asset_file );
+	}
+}
+
 if ( ! is_dir( $dist_dir ) && ! mkdir( $dist_dir, 0777, true ) ) {
 	fwrite( STDERR, "Could not create the dist directory.\n" );
 	exit( 1 );
@@ -57,4 +63,3 @@ foreach ( $files as $relative_path ) {
 
 $zip->close();
 fwrite( STDOUT, $zip_path . PHP_EOL );
-

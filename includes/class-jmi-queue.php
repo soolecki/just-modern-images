@@ -28,12 +28,37 @@ final class JMI_Queue {
 	private $converter;
 
 	/**
+	 * Quality profile provider.
+	 *
+	 * @var JMI_Quality_Profiles
+	 */
+	private $profiles;
+
+	/**
+	 * Queryable per-attachment status.
+	 *
+	 * @var JMI_Media_Status
+	 */
+	private $media_status;
+
+	/**
+	 * Attachments encountered during the current frontend request.
+	 *
+	 * @var array<int, bool>
+	 */
+	private $demanded = array();
+
+	/**
 	 * Set up the queue.
 	 *
-	 * @param JMI_Converter $converter Attachment converter.
+	 * @param JMI_Converter        $converter    Attachment converter.
+	 * @param JMI_Quality_Profiles $profiles     Quality profile provider.
+	 * @param JMI_Media_Status     $media_status Per-attachment status.
 	 */
-	public function __construct( $converter ) {
-		$this->converter = $converter;
+	public function __construct( $converter, $profiles, $media_status ) {
+		$this->converter    = $converter;
+		$this->profiles     = $profiles;
+		$this->media_status = $media_status;
 	}
 
 	/**
@@ -45,6 +70,7 @@ final class JMI_Queue {
 		add_filter( 'wp_generate_attachment_metadata', array( $this, 'schedule_after_metadata' ), 100, 2 );
 		add_action( self::PROCESS_HOOK, array( $this, 'process_attachment' ) );
 		add_action( self::SCAN_HOOK, array( $this, 'scan_library' ) );
+		add_action( 'shutdown', array( $this, 'flush_demanded' ), 20 );
 	}
 
 	/**
@@ -58,7 +84,7 @@ final class JMI_Queue {
 		$attachment_id = absint( $attachment_id );
 
 		if ( $attachment_id && $this->is_supported_attachment( $attachment_id ) ) {
-			$this->schedule_attachment( $attachment_id, 5 );
+			$this->schedule_attachment( $attachment_id, 5, 'upload' );
 		}
 
 		return $metadata;
@@ -67,19 +93,86 @@ final class JMI_Queue {
 	/**
 	 * Schedule one attachment if it is not already queued.
 	 *
-	 * @param int $attachment_id Attachment ID.
-	 * @param int $delay         Delay in seconds.
+	 * @param int    $attachment_id Attachment ID.
+	 * @param int    $delay         Delay in seconds.
+	 * @param string $priority      Priority lane.
+	 * @param bool   $expedite      Whether an existing later event may be moved.
 	 * @return bool
 	 */
-	public function schedule_attachment( $attachment_id, $delay = 1 ) {
+	public function schedule_attachment( $attachment_id, $delay = 1, $priority = 'background', $expedite = false ) {
 		$attachment_id = absint( $attachment_id );
 		$args          = array( $attachment_id );
 
-		if ( ! $attachment_id || wp_next_scheduled( self::PROCESS_HOOK, $args ) ) {
+		if ( ! $attachment_id || ! $this->is_supported_attachment( $attachment_id ) ) {
 			return false;
 		}
 
-		return (bool) wp_schedule_single_event( time() + max( 1, (int) $delay ), self::PROCESS_HOOK, $args );
+		$priority       = $this->normalize_priority( $priority );
+		$scheduled_for  = time() + max( 1, (int) $delay );
+		$current_event  = wp_next_scheduled( self::PROCESS_HOOK, $args );
+		$current_status = $this->media_status->get( $attachment_id, $this->profiles->generation_profile() );
+		$is_higher      = $this->priority_value( $priority ) > $this->priority_value( $current_status['priority'] );
+
+		if ( $current_event ) {
+			if ( (int) $current_event <= $scheduled_for ) {
+				if ( $is_higher ) {
+					$this->media_status->mark_queued( $attachment_id, $priority, $this->profiles->generation_profile() );
+				}
+				return false;
+			}
+
+			if ( ! $expedite && ! $is_higher ) {
+				return false;
+			}
+
+			wp_unschedule_event( $current_event, self::PROCESS_HOOK, $args );
+		}
+
+		$scheduled = (bool) wp_schedule_single_event( $scheduled_for, self::PROCESS_HOOK, $args );
+		if ( $scheduled ) {
+			$this->media_status->mark_queued( $attachment_id, $priority, $this->profiles->generation_profile() );
+		}
+
+		return $scheduled;
+	}
+
+	/**
+	 * Remember that an attachment was needed by a real frontend response.
+	 *
+	 * No visitor or page data is stored. IDs are deduplicated in memory and
+	 * scheduled only after WordPress has finished sending the response.
+	 *
+	 * @param int $attachment_id Attachment ID.
+	 * @return void
+	 */
+	public function note_demand( $attachment_id ) {
+		$attachment_id = absint( $attachment_id );
+		$limit         = min( 25, max( 1, (int) apply_filters( 'jmi_demand_limit', 10 ) ) );
+
+		if ( $attachment_id && count( $this->demanded ) < $limit ) {
+			$this->demanded[ $attachment_id ] = true;
+		}
+	}
+
+	/**
+	 * Move incomplete images seen on the frontend ahead of the backfill scan.
+	 *
+	 * @return void
+	 */
+	public function flush_demanded() {
+		$generation_profile = $this->profiles->generation_profile();
+
+		foreach ( array_keys( $this->demanded ) as $attachment_id ) {
+			if (
+				$this->is_supported_attachment( $attachment_id ) &&
+				$this->media_status->needs_processing( $attachment_id, $generation_profile ) &&
+				apply_filters( 'jmi_should_prioritize_attachment', true, $attachment_id )
+			) {
+				$this->schedule_attachment( $attachment_id, 1, 'demand', true );
+			}
+		}
+
+		$this->demanded = array();
 	}
 
 	/**
@@ -90,27 +183,38 @@ final class JMI_Queue {
 	 */
 	public function process_attachment( $attachment_id ) {
 		$attachment_id = absint( $attachment_id );
-		if ( ! $attachment_id || ! $this->acquire_lock( $attachment_id ) ) {
+		if ( ! $attachment_id ) {
 			return;
 		}
 
+		if ( ! $this->acquire_lock( $attachment_id ) ) {
+			wp_schedule_single_event( time() + 30, self::PROCESS_HOOK, array( $attachment_id ) );
+			return;
+		}
+
+		$generation_profile = $this->profiles->generation_profile();
+		$current_status     = $this->media_status->get( $attachment_id, $generation_profile );
+		$this->media_status->mark_processing( $attachment_id, $current_status['priority'], $generation_profile );
+
 		try {
 			$summary = $this->converter->convert_attachment( $attachment_id );
-			$this->record_result( $summary );
 		} catch ( Throwable $error ) {
-			$this->record_result(
-				array(
-					'attachment_id' => $attachment_id,
-					'generated'     => 0,
-					'reused'        => 0,
-					'skipped'       => 0,
-					'failed'        => 1,
-					'last_reason'   => 'unexpected_worker_failure',
-				)
+			$summary = array(
+				'attachment_id' => $attachment_id,
+				'generated'     => 0,
+				'reused'        => 0,
+				'retained'      => 0,
+				'skipped'       => 0,
+				'failed'        => 1,
+				'last_reason'   => 'unexpected_worker_failure',
+				'state'         => 'failed',
 			);
 		} finally {
 			$this->release_lock( $attachment_id );
 		}
+
+		$this->media_status->record_result( $attachment_id, $generation_profile, $summary );
+		$this->record_counters( $summary );
 	}
 
 	/**
@@ -120,16 +224,19 @@ final class JMI_Queue {
 	 * @return void
 	 */
 	public function start_scan( $reason = 'manual' ) {
+		$stats = $this->media_status->library_stats( $this->profiles->generation_profile() );
 		update_option(
 			self::STATUS_OPTION,
 			array(
 				'status'      => 'queued',
 				'reason'      => sanitize_key( $reason ),
 				'cursor'      => 0,
+				'total'       => $stats['total'],
 				'scheduled'   => 0,
 				'processed'   => 0,
 				'generated'   => 0,
 				'reused'      => 0,
+				'retained'    => 0,
 				'skipped'     => 0,
 				'failed'      => 0,
 				'last_reason' => '',
@@ -177,7 +284,7 @@ final class JMI_Queue {
 		}
 
 		foreach ( $attachment_ids as $index => $attachment_id ) {
-			if ( $this->schedule_attachment( $attachment_id, 2 + (int) $index ) ) {
+			if ( $this->schedule_attachment( $attachment_id, 2 + (int) $index, 'background' ) ) {
 				++$status['scheduled'];
 			}
 			$status['cursor'] = absint( $attachment_id );
@@ -201,10 +308,12 @@ final class JMI_Queue {
 			'status'      => 'idle',
 			'reason'      => '',
 			'cursor'      => 0,
+			'total'       => 0,
 			'scheduled'   => 0,
 			'processed'   => 0,
 			'generated'   => 0,
 			'reused'      => 0,
+			'retained'    => 0,
 			'skipped'     => 0,
 			'failed'      => 0,
 			'last_reason' => '',
@@ -230,11 +339,11 @@ final class JMI_Queue {
 	 * @param array<string, int|string> $summary Conversion summary.
 	 * @return void
 	 */
-	private function record_result( $summary ) {
+	private function record_counters( $summary ) {
 		$status = $this->status();
 		++$status['processed'];
 
-		foreach ( array( 'generated', 'reused', 'skipped', 'failed' ) as $counter ) {
+		foreach ( array( 'generated', 'reused', 'retained', 'skipped', 'failed' ) as $counter ) {
 			$status[ $counter ] += isset( $summary[ $counter ] ) ? (int) $summary[ $counter ] : 0;
 		}
 
@@ -283,7 +392,36 @@ final class JMI_Queue {
 	 * @param int $attachment_id Attachment ID.
 	 * @return bool
 	 */
-	private function is_supported_attachment( $attachment_id ) {
+	public function is_supported_attachment( $attachment_id ) {
 		return in_array( get_post_mime_type( $attachment_id ), array( 'image/jpeg', 'image/png' ), true );
+	}
+
+	/**
+	 * Normalize a priority lane.
+	 *
+	 * @param string $priority Priority lane.
+	 * @return string
+	 */
+	private function normalize_priority( $priority ) {
+		$priority = sanitize_key( $priority );
+
+		return in_array( $priority, array( 'manual', 'upload', 'demand', 'background' ), true ) ? $priority : 'background';
+	}
+
+	/**
+	 * Convert a lane into a comparable value.
+	 *
+	 * @param string $priority Priority lane.
+	 * @return int
+	 */
+	private function priority_value( $priority ) {
+		$values = array(
+			'manual'     => 400,
+			'upload'     => 300,
+			'demand'     => 200,
+			'background' => 100,
+		);
+
+		return $values[ sanitize_key( $priority ) ] ?? 0;
 	}
 }

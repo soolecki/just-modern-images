@@ -15,7 +15,9 @@ The project is currently under active development and is not ready for productio
 ## Current status
 
 The original prototype has been replaced with a fail-safe conversion pipeline.
-The project is still in pre-release development and needs broader integration
+Version 0.11 adds observable Media Library state, explicit manual priority,
+request-based processing priority without visitor tracking, and a graphical
+progress screen. The project is still in pre-release development and needs broader integration
 testing before it is installed on production sites.
 
 ## Development

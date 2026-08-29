@@ -3,7 +3,7 @@ Tags: webp, avif, images, performance, optimization
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.10.0
+Stable tag: 0.11.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -20,11 +20,14 @@ Activate the plugin and it will:
 * scan existing Media Library images automatically;
 * create WebP and AVIF companions only when they are valid and smaller;
 * serve complete responsive image sets through the `picture` element;
-* keep the original image as the permanent fallback.
+* keep the original image as the permanent fallback;
+* prioritize new, manually selected, and currently needed images.
 
 The plugin never replaces WordPress attachment filenames, MIME types, or core image metadata. Deactivation therefore restores normal WordPress image markup immediately.
 
 The only preference is image quality: Economy, Standard, High, or Ultra. Server capability, conversion progress, and failure handling are automatic.
+
+The settings screen shows separate library-review and ready-image progress. Media Library rows and attachment details show whether an image is ready, queued, partially available, or needs attention. Administrators can move individual images or a bulk selection to the front of the queue.
 
 = Designed to fail safely =
 
@@ -35,6 +38,8 @@ WebP and AVIF are independent. If one encoder is missing or unstable, the other 
 = No frontend conversion =
 
 Conversion never runs while a visitor is waiting for a page. Frontend filters only read a small attachment manifest and leave the original HTML unchanged when a complete modern source set is not ready.
+
+When WordPress renders a page, attachments used by that response can move ahead of the background library scan. The plugin records only the attachment ID needed for processing. It does not store visitors, page URLs, view counts, cookies, or analytics data. Fully cached responses may bypass WordPress and therefore do not provide this priority signal.
 
 = Privacy =
 
@@ -70,6 +75,10 @@ Yes. Activation starts a cursor-based background scan that can resume after time
 
 The source may be unavailable locally, the server may not support the format reliably, the image may exceed the safe memory budget, or the generated file may be no smaller than the original. These are safe skip conditions.
 
+= What happens when I change image quality? =
+
+The Media Library is refreshed in the background. Existing valid modern files remain active until verified replacements are ready. Images selected manually, newly uploaded, or needed by a frontend response are processed before the remaining library backfill.
+
 = Does it work with a CDN? =
 
 The plugin uses normal WordPress upload URLs and provides a filter for CDN integrations. A CDN or offload plugin must make generated companion files available just like other files in the uploads directory.
@@ -79,6 +88,15 @@ The plugin uses normal WordPress upload URLs and provides a filter for CDN integ
 Not in this release. The first release intentionally covers attachment images rendered through standard WordPress APIs without buffering or rewriting the entire page.
 
 == Changelog ==
+
+= 0.11.0 =
+
+* Replaced quality radio buttons with a compact profile selector.
+* Added graphical library progress and clearer server and queue status.
+* Added attachment status, Media Library filters, and single and bulk priority actions.
+* Added privacy-friendly request-based prioritization without visitor tracking.
+* Kept last known good variants active during unsuccessful quality refreshes.
+* Added per-image retry backoff and clearer pending, partial, stale, and failed states.
 
 = 0.10.0 =
 

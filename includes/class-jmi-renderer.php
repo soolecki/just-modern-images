@@ -24,12 +24,21 @@ final class JMI_Renderer {
 	private $manifest;
 
 	/**
+	 * Background queue used for request-based prioritization.
+	 *
+	 * @var JMI_Queue|null
+	 */
+	private $queue;
+
+	/**
 	 * Set up the renderer.
 	 *
-	 * @param JMI_Manifest $manifest Manifest storage.
+	 * @param JMI_Manifest   $manifest Manifest storage.
+	 * @param JMI_Queue|null $queue    Background queue.
 	 */
-	public function __construct( $manifest ) {
+	public function __construct( $manifest, $queue = null ) {
 		$this->manifest = $manifest;
+		$this->queue    = $queue;
 	}
 
 	/**
@@ -100,6 +109,10 @@ final class JMI_Renderer {
 
 		if ( ! apply_filters( 'jmi_should_render_attachment', true, $attachment_id, $context, $html ) ) {
 			return $html;
+		}
+
+		if ( $this->queue ) {
+			$this->queue->note_demand( $attachment_id );
 		}
 
 		$manifest = $this->manifest->get( $attachment_id );

@@ -10,6 +10,7 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 }
 
 require_once __DIR__ . '/includes/class-jmi-manifest.php';
+require_once __DIR__ . '/includes/class-jmi-media-status.php';
 
 /**
  * Remove plugin data for the current site.
@@ -53,6 +54,14 @@ function jmi_uninstall_site() {
 	) {
 		delete_option( $option_name );
 	}
+
+	$wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+		$wpdb->prepare(
+			"DELETE FROM {$wpdb->postmeta} WHERE meta_key IN (%s, %s)",
+			JMI_Media_Status::STATE_META_KEY,
+			JMI_Media_Status::DETAIL_META_KEY
+		)
+	);
 
 	$lock_pattern = $wpdb->esc_like( 'jmi_attachment_lock_' ) . '%';
 	$wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching

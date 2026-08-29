@@ -69,9 +69,11 @@ final class JMI_Converter {
 			'attachment_id' => $attachment_id,
 			'generated'     => 0,
 			'reused'        => 0,
+			'retained'      => 0,
 			'skipped'       => 0,
 			'failed'        => 0,
 			'last_reason'   => '',
+			'state'         => 'pending',
 		);
 
 		if ( ! $attachment_id || ! wp_attachment_is_image( $attachment_id ) ) {
@@ -96,6 +98,9 @@ final class JMI_Converter {
 		$generation_profile         = $this->profiles->generation_profile();
 		$next                       = $this->manifest->empty_manifest();
 		$next['generation_profile'] = $generation_profile;
+		$expected_variants          = 0;
+		$current_variants           = 0;
+		$usable_variants            = 0;
 
 		foreach ( $sources as $source_key => $source ) {
 			$next['sources'][ $source_key ] = $this->source_manifest_data( $source );
@@ -107,8 +112,14 @@ final class JMI_Converter {
 					'state'  => 'unknown',
 					'reason' => 'not_checked',
 				);
+				$is_required          = 'available' === ( $capability['state'] ?? 'unknown' );
+				$was_reused           = false;
 
-				if ( 'available' !== ( $capability['state'] ?? 'unknown' ) ) {
+				if ( $is_required ) {
+					++$expected_variants;
+				}
+
+				if ( ! $is_required ) {
 					$variant = $this->outcome(
 						'skipped',
 						(string) ( $capability['reason'] ?? 'editor_unsupported' ),
@@ -116,33 +127,59 @@ final class JMI_Converter {
 						$generation_profile
 					);
 				} elseif ( $this->can_reuse( $previous, $previous_variant, $source, $generation_profile ) ) {
-					$variant = $previous_variant;
+					$variant    = $previous_variant;
+					$was_reused = true;
 					++$summary['reused'];
-					$next['sources'][ $source_key ]['variants'][ $mime_type ] = $variant;
-					continue;
 				} else {
 					$variant = $this->convert_variant( $source, $mime_type, $extension, $generation_profile );
 				}
 
-				if ( 'ready' === $variant['status'] ) {
+				if ( 'ready' === $variant['status'] && ! $was_reused ) {
 					++$summary['generated'];
 				} elseif ( 'failed' === $variant['status'] ) {
 					++$summary['failed'];
 					$summary['last_reason'] = $variant['reason'];
 					$this->capabilities->record_failure( $mime_type, $variant['reason'] );
-					$variant = $this->keep_previous_on_refresh_failure(
-						$previous,
-						$previous_variant,
-						$source,
-						$variant
-					);
-				} else {
+				} elseif ( 'ready' !== $variant['status'] ) {
 					++$summary['skipped'];
 					$summary['last_reason'] = $variant['reason'];
 				}
 
+				if ( 'ready' !== $variant['status'] ) {
+					$issue   = $variant;
+					$variant = $this->keep_previous_on_refresh_issue(
+						$previous,
+						$previous_variant,
+						$source,
+						$issue
+					);
+
+					if ( 'ready' === $variant['status'] ) {
+						++$summary['retained'];
+					}
+				}
+
+				if ( 'ready' === $variant['status'] ) {
+					++$usable_variants;
+					if ( ( $variant['generation_profile'] ?? '' ) === $generation_profile ) {
+						if ( $is_required ) {
+							++$current_variants;
+						}
+					}
+				}
+
 				$next['sources'][ $source_key ]['variants'][ $mime_type ] = $variant;
 			}
+		}
+
+		if ( $expected_variants && $current_variants === $expected_variants ) {
+			$summary['state'] = 'ready';
+		} elseif ( $summary['failed'] ) {
+			$summary['state'] = $usable_variants ? 'stale' : 'failed';
+		} elseif ( $usable_variants ) {
+			$summary['state'] = 'partial';
+		} else {
+			$summary['state'] = 'skipped';
 		}
 
 		$this->manifest->save( $attachment_id, $next );
@@ -381,15 +418,15 @@ final class JMI_Converter {
 	}
 
 	/**
-	 * Keep a valid older-quality file if only its refresh failed.
+	 * Keep a valid older-quality file until a replacement is ready.
 	 *
 	 * @param array<string, mixed>      $previous        Previous manifest.
 	 * @param array<string, mixed>|null $previous_variant Previous variant.
 	 * @param array<string, mixed>      $source          Current source.
-	 * @param array<string, mixed>      $failed          Failed outcome.
+	 * @param array<string, mixed>      $issue           Failed or skipped outcome.
 	 * @return array<string, mixed>
 	 */
-	private function keep_previous_on_refresh_failure( $previous, $previous_variant, $source, $failed ) {
+	private function keep_previous_on_refresh_issue( $previous, $previous_variant, $source, $issue ) {
 		$source_key = $source['size_name'];
 		if (
 			! is_array( $previous_variant ) ||
@@ -397,19 +434,19 @@ final class JMI_Converter {
 			empty( $previous['sources'][ $source_key ]['signature'] ) ||
 			$source['signature'] !== $previous['sources'][ $source_key ]['signature']
 		) {
-			return $failed;
+			return $issue;
 		}
 
 		if ( empty( $previous_variant['mime_type'] ) ) {
-			return $failed;
+			return $issue;
 		}
 
 		$path = $this->absolute_variant_path( $previous_variant['relative_path'] ?? '' );
 		if ( ! $path || 'ready' !== $this->validate_output( $path, $previous_variant['mime_type'], $source )['status'] ) {
-			return $failed;
+			return $issue;
 		}
 
-		$previous_variant['warning'] = $failed['reason'];
+		$previous_variant['warning'] = $issue['reason'];
 
 		return $previous_variant;
 	}
