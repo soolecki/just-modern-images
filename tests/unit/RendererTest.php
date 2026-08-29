@@ -5,7 +5,11 @@ use PHPUnit\Framework\TestCase;
 final class RendererTest extends TestCase {
 
 	protected function setUp(): void {
-		$GLOBALS['jmi_test_manifests'] = array();
+		$GLOBALS['jmi_test_manifests']  = array();
+		$GLOBALS['jmi_test_options']    = array();
+		$GLOBALS['jmi_test_post_meta']  = array();
+		$GLOBALS['jmi_test_mime_types'] = array();
+		$GLOBALS['jmi_test_scheduled']  = array();
 	}
 
 	public function test_it_adds_avif_and_webp_without_replacing_the_original_image(): void {
@@ -68,6 +72,20 @@ final class RendererTest extends TestCase {
 
 		$this->assertStringNotContainsString( 'type="image/avif"', $result );
 		$this->assertStringContainsString( 'type="image/webp"', $result );
+	}
+
+	public function test_it_prioritizes_an_unprocessed_image_used_on_the_frontend(): void {
+		$GLOBALS['jmi_test_mime_types'][10] = 'image/jpeg';
+		$queue                              = new JMI_Queue( new stdClass(), new JMI_Quality_Profiles(), new JMI_Media_Status() );
+		$renderer                           = new JMI_Renderer( new JMI_Manifest(), $queue );
+		$html                               = '<img src="https://example.test/wp-content/uploads/2026/08/photo.jpg" alt="Example">';
+
+		$this->assertSame( $html, $renderer->filter_content_image( $html, 'the_content', 10 ) );
+		$queue->flush_demanded();
+
+		$this->assertCount( 1, $GLOBALS['jmi_test_scheduled'] );
+		$this->assertSame( array( 10 ), $GLOBALS['jmi_test_scheduled'][0]['args'] );
+		$this->assertSame( 'demand', ( new JMI_Media_Status() )->get( 10, ( new JMI_Quality_Profiles() )->generation_profile() )['priority'] );
 	}
 
 	private function manifest(): array {

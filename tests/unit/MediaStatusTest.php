@@ -57,4 +57,34 @@ final class MediaStatusTest extends TestCase {
 		$this->assertGreaterThan( time(), $first['retry_after'] );
 		$this->assertFalse( $status->needs_processing( 12, 'v1:standard' ) );
 	}
+
+	public function test_retry_count_survives_queue_and_processing_states(): void {
+		$status = new JMI_Media_Status();
+		$status->record_result(
+			13,
+			'v1:standard',
+			array(
+				'state'       => 'failed',
+				'failed'      => 1,
+				'last_reason' => 'encode_failed',
+			)
+		);
+
+		$first_retry = $status->get( 13, 'v1:standard' )['retry_after'];
+		$status->mark_queued( 13, 'manual', 'v1:standard' );
+		$status->mark_processing( 13, 'manual', 'v1:standard' );
+		$status->record_result(
+			13,
+			'v1:standard',
+			array(
+				'state'       => 'failed',
+				'failed'      => 1,
+				'last_reason' => 'encode_failed',
+			)
+		);
+
+		$second = $status->get( 13, 'v1:standard' );
+		$this->assertSame( 2, $second['failure_count'] );
+		$this->assertGreaterThan( $first_retry, $second['retry_after'] );
+	}
 }

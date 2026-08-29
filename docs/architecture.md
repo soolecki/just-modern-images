@@ -50,8 +50,10 @@ One stored value selects a named profile:
 These are initial values. They must be validated on photographic, illustrated,
 transparent, and text-heavy fixtures before the first stable release.
 
-Changing a profile invalidates the generation profile, not the original files.
-The background queue refreshes companions in place.
+Changing a profile invalidates the processing status, not the original files or
+the last verified companions. The background queue refreshes companions in
+place and the renderer keeps using the last known good generation until its
+replacement has passed validation.
 
 ### Capability probe
 
@@ -129,13 +131,23 @@ Jobs are:
 - safe to retry after a fatal request or missed cron event;
 - observable from one small status panel.
 
+The queue has four lanes, in descending order: a manual Media Library request,
+a new upload, an attachment needed by a frontend response, and the background
+library scan. A higher-priority request may move an already scheduled job
+forward. Failed jobs use attachment-level exponential backoff, while repeated
+encoder failures pause only the affected output format.
+
 Frontend rendering may enqueue stale work but never performs it synchronously.
+The signal is deliberately ephemeral: one request collects only attachment IDs
+and stores no visitor, page URL, counter, cookie, or analytics record. A small
+per-response limit prevents a large page from flooding WP-Cron.
 
 ### Renderer
 
 The renderer accepts an attachment ID and existing image HTML. It returns the
-input unchanged unless a current, validated manifest contains at least one
-usable companion.
+input unchanged unless a validated manifest contains at least one usable
+companion. A manifest from the preceding quality profile remains usable while
+its replacement is generated.
 
 Eligible images become:
 
@@ -158,15 +170,20 @@ emails, and head metadata.
 
 ### Admin experience
 
-The settings screen has one preference: Economy, Standard, High, or Ultra.
-Standard is the default.
+The settings screen has one preference: a select containing Economy, Standard,
+High, and Ultra. Standard is the default.
 
 The same screen can show operational information without adding configuration:
 
 - WebP and AVIF availability;
-- processed, queued, skipped, and failed attachment counts;
-- latest short failure reason;
-- rebuild and remove-generated-files actions.
+- separate ready and reviewed progress;
+- ready, partial, waiting, stale, and failed attachment counts;
+- latest queue activity;
+- a resumable library scan action.
+
+The Media Library list has a compact status column, status filters, a signed
+single-image priority action, and a bulk priority action. Attachment details
+show the overall state plus separate WebP and AVIF results.
 
 Actions use capability checks, nonces, bounded background jobs, and explicit
 confirmation for deletion.
@@ -202,4 +219,3 @@ Before a public beta:
 - Plugin Check and WordPress Coding Standards pass.
 - Activation, deactivation, rebuild, deletion, timeout, and interrupted-job
   recovery are tested on a copy of a real media library.
-

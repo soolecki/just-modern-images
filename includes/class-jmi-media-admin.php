@@ -251,15 +251,19 @@ final class JMI_Media_Admin {
 		$profile = $this->profiles->generation_profile();
 		if ( 'ready' === $filter ) {
 			$status_query = array(
-				'key'     => JMI_Media_Status::STATE_META_KEY,
-				'value'   => $this->media_status->current_values( array( 'ready' ), $profile ),
-				'compare' => 'IN',
+				array(
+					'key'     => JMI_Media_Status::STATE_META_KEY,
+					'value'   => $this->media_status->current_values( array( 'ready' ), $profile ),
+					'compare' => 'IN',
+				),
 			);
 		} elseif ( 'attention' === $filter ) {
 			$status_query = array(
-				'key'     => JMI_Media_Status::STATE_META_KEY,
-				'value'   => $this->media_status->current_values( array( 'failed', 'stale' ), $profile ),
-				'compare' => 'IN',
+				array(
+					'key'     => JMI_Media_Status::STATE_META_KEY,
+					'value'   => $this->media_status->current_values( array( 'failed', 'stale' ), $profile ),
+					'compare' => 'IN',
+				),
 			);
 		} else {
 			$current_terminal = $this->media_status->current_values( array( 'ready', 'partial', 'skipped', 'failed', 'stale' ), $profile );
@@ -296,15 +300,21 @@ final class JMI_Media_Admin {
 	 */
 	public function handle_single_action() {
 		$attachment_id = isset( $_GET['attachment_id'] ) ? absint( $_GET['attachment_id'] ) : 0;
-		if ( ! $attachment_id || ! current_user_can( 'edit_post', $attachment_id ) ) {
+		if (
+			! $attachment_id ||
+			! current_user_can( 'edit_post', $attachment_id ) ||
+			! $this->queue->is_supported_attachment( $attachment_id )
+		) {
 			wp_die( esc_html__( 'You are not allowed to process this attachment.', 'just-modern-images' ) );
 		}
 
 		check_admin_referer( 'jmi_process_attachment_' . $attachment_id );
 		$this->queue->schedule_attachment( $attachment_id, 1, 'manual', true );
 
-		$redirect = wp_get_referer();
-		$redirect = wp_validate_redirect( $redirect, admin_url( 'upload.php' ) );
+		$return_to = isset( $_GET['return_to'] ) ? sanitize_key( wp_unslash( $_GET['return_to'] ) ) : 'media';
+		$redirect  = 'edit' === $return_to
+			? admin_url( 'post.php?post=' . $attachment_id . '&action=edit' )
+			: admin_url( 'upload.php?mode=list' );
 		wp_safe_redirect( add_query_arg( 'jmi-queued', 1, $redirect ) );
 		exit;
 	}
@@ -352,10 +362,14 @@ final class JMI_Media_Admin {
 	 * @return string
 	 */
 	private function process_url( $attachment_id ) {
-		$url = add_query_arg(
+		global $pagenow;
+
+		$return_to = 'post.php' === $pagenow ? 'edit' : 'media';
+		$url       = add_query_arg(
 			array(
 				'action'        => 'jmi_process_attachment',
 				'attachment_id' => absint( $attachment_id ),
+				'return_to'     => $return_to,
 			),
 			admin_url( 'admin-post.php' )
 		);

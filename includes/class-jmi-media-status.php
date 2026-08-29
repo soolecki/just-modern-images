@@ -66,7 +66,7 @@ final class JMI_Media_Status {
 	 */
 	public function mark_queued( $attachment_id, $priority, $generation_profile ) {
 		$previous      = $this->get( $attachment_id, $generation_profile );
-		$same_profile  = $generation_profile === $previous['profile'];
+		$same_profile  = $previous['profile'] === $generation_profile;
 		$failure_count = $same_profile ? (int) $previous['failure_count'] : 0;
 		$this->write(
 			$attachment_id,
