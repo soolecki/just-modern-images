@@ -10,10 +10,10 @@
 	<config name="minimum_supported_wp_version" value="6.5"/>
 
 	<file>just-modern-images.php</file>
+	<file>uninstall.php</file>
 	<file>includes</file>
 
 	<exclude-pattern>vendor/*</exclude-pattern>
 
 	<rule ref="WordPress"/>
 </ruleset>
-

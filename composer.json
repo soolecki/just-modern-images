@@ -16,6 +16,7 @@
     "sort-packages": true
   },
   "scripts": {
+    "build": "php tools/build.php",
     "lint": "phpcs",
     "test": "phpunit"
   }

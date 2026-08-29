@@ -29,6 +29,12 @@ composer lint
 
 The production plugin has no Composer or JavaScript runtime dependencies.
 
+Create an installable archive with:
+
+```bash
+composer build
+```
+
 ## License
 
 GPL-2.0-or-later.
