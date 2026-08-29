@@ -14,7 +14,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class JMI_Manifest {
 
-	const META_KEY = '_jmi_manifest';
+	const META_KEY       = '_jmi_manifest';
 	const SCHEMA_VERSION = 1;
 
 	/**

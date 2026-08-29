@@ -14,7 +14,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class JMI_Quality_Profiles {
 
-	const OPTION_NAME = 'jmi_quality_profile';
+	const OPTION_NAME     = 'jmi_quality_profile';
 	const DEFAULT_PROFILE = 'standard';
 
 	/**
@@ -113,4 +113,3 @@ final class JMI_Quality_Profiles {
 		);
 	}
 }
-

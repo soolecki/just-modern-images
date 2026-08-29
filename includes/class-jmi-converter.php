@@ -14,16 +14,32 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class JMI_Converter {
 
-	/** @var JMI_Quality_Profiles */
+	/**
+	 * Quality profile provider.
+	 *
+	 * @var JMI_Quality_Profiles
+	 */
 	private $profiles;
 
-	/** @var JMI_Capabilities */
+	/**
+	 * Verified server capabilities.
+	 *
+	 * @var JMI_Capabilities
+	 */
 	private $capabilities;
 
-	/** @var JMI_Source_Inventory */
+	/**
+	 * Attachment source inventory.
+	 *
+	 * @var JMI_Source_Inventory
+	 */
 	private $inventory;
 
-	/** @var JMI_Manifest */
+	/**
+	 * Plugin-owned manifest storage.
+	 *
+	 * @var JMI_Manifest
+	 */
 	private $manifest;
 
 	/**
@@ -76,9 +92,9 @@ final class JMI_Converter {
 			$capabilities = $this->capabilities->probe_all();
 		}
 
-		$previous           = $this->manifest->get( $attachment_id );
-		$generation_profile = $this->profiles->generation_profile();
-		$next               = $this->manifest->empty_manifest();
+		$previous                   = $this->manifest->get( $attachment_id );
+		$generation_profile         = $this->profiles->generation_profile();
+		$next                       = $this->manifest->empty_manifest();
 		$next['generation_profile'] = $generation_profile;
 
 		foreach ( $sources as $source_key => $source ) {
@@ -112,7 +128,7 @@ final class JMI_Converter {
 				} elseif ( 'failed' === $variant['status'] ) {
 					++$summary['failed'];
 					$summary['last_reason'] = $variant['reason'];
-					$variant = $this->keep_previous_on_refresh_failure(
+					$variant                = $this->keep_previous_on_refresh_failure(
 						$previous,
 						$previous_variant,
 						$source,
@@ -147,15 +163,15 @@ final class JMI_Converter {
 			return $this->outcome( 'skipped', 'memory_budget', $mime_type, $generation_profile );
 		}
 
-		$target_path     = $source['path'] . '.' . $extension;
-		$relative_path   = $source['relative_path'] . '.' . $extension;
+		$target_path      = $source['path'] . '.' . $extension;
+		$relative_path    = $source['relative_path'] . '.' . $extension;
 		$target_directory = dirname( $target_path );
-		$temp_filename   = wp_unique_filename(
+		$temp_filename    = wp_unique_filename(
 			$target_directory,
 			'.' . wp_basename( $source['path'] ) . '.jmi-' . wp_generate_password( 8, false ) . '.' . $extension
 		);
-		$temp_path = $target_directory . DIRECTORY_SEPARATOR . $temp_filename;
-		$saved_path = $temp_path;
+		$temp_path        = $target_directory . DIRECTORY_SEPARATOR . $temp_filename;
+		$saved_path       = $temp_path;
 
 		try {
 			$editor = wp_get_image_editor( $source['path'] );
@@ -224,7 +240,10 @@ final class JMI_Converter {
 	 */
 	private function validate_output( $path, $mime_type, $source ) {
 		if ( ! is_readable( $path ) || wp_filesize( $path ) < 1 ) {
-			return array( 'status' => 'failed', 'reason' => 'empty_output' );
+			return array(
+				'status' => 'failed',
+				'reason' => 'empty_output',
+			);
 		}
 
 		$image = getimagesize( $path );
@@ -235,18 +254,27 @@ final class JMI_Converter {
 			(int) $source['width'] !== (int) $image[0] ||
 			(int) $source['height'] !== (int) $image[1]
 		) {
-			return array( 'status' => 'failed', 'reason' => 'invalid_output' );
+			return array(
+				'status' => 'failed',
+				'reason' => 'invalid_output',
+			);
 		}
 
 		$decoder = wp_get_image_editor( $path );
 		if ( is_wp_error( $decoder ) ) {
-			return array( 'status' => 'failed', 'reason' => 'decode_failed' );
+			return array(
+				'status' => 'failed',
+				'reason' => 'decode_failed',
+			);
 		}
 		unset( $decoder );
 
 		$bytes = wp_filesize( $path );
 		if ( $bytes >= (int) $source['bytes'] ) {
-			return array( 'status' => 'skipped', 'reason' => 'not_smaller' );
+			return array(
+				'status' => 'skipped',
+				'reason' => 'not_smaller',
+			);
 		}
 
 		return array(
@@ -267,20 +295,21 @@ final class JMI_Converter {
 	 */
 	private function move_into_place( $temporary_path, $target_path ) {
 		if ( ! file_exists( $target_path ) ) {
-			return @rename( $temporary_path, $target_path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+			// A same-directory rename keeps a validated file from being served partially.
+			return @rename( $temporary_path, $target_path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.rename_rename
 		}
 
 		$backup_path = $target_path . '.jmi-backup-' . wp_generate_password( 8, false );
-		if ( ! @rename( $target_path, $backup_path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		if ( ! @rename( $target_path, $backup_path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.rename_rename
 			return false;
 		}
 
-		if ( @rename( $temporary_path, $target_path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		if ( @rename( $temporary_path, $target_path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.rename_rename
 			wp_delete_file( $backup_path );
 			return true;
 		}
 
-		@rename( $backup_path, $target_path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		@rename( $backup_path, $target_path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.rename_rename
 		return false;
 	}
 
@@ -301,7 +330,7 @@ final class JMI_Converter {
 
 		$available = max( 0, $limit - memory_get_usage( true ) - ( 16 * MB_IN_BYTES ) );
 
-		return $estimated <= $available;
+		return $available >= $estimated;
 	}
 
 	/**
@@ -318,7 +347,7 @@ final class JMI_Converter {
 			return false;
 		}
 
-		if ( $generation_profile !== ( $variant['generation_profile'] ?? '' ) ) {
+		if ( ( $variant['generation_profile'] ?? '' ) !== $generation_profile ) {
 			return false;
 		}
 

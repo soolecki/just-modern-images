@@ -14,16 +14,28 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class JMI_Settings {
 
-	const PAGE_SLUG = 'just-modern-images';
+	const PAGE_SLUG      = 'just-modern-images';
 	const SETTINGS_GROUP = 'jmi_settings';
 
-	/** @var JMI_Quality_Profiles */
+	/**
+	 * Quality profile provider.
+	 *
+	 * @var JMI_Quality_Profiles
+	 */
 	private $profiles;
 
-	/** @var JMI_Capabilities */
+	/**
+	 * Verified server capabilities.
+	 *
+	 * @var JMI_Capabilities
+	 */
 	private $capabilities;
 
-	/** @var JMI_Queue */
+	/**
+	 * Background conversion queue.
+	 *
+	 * @var JMI_Queue
+	 */
 	private $queue;
 
 	/**
@@ -229,4 +241,3 @@ final class JMI_Settings {
 		return __( 'Waiting for a capability check', 'just-modern-images' );
 	}
 }
-

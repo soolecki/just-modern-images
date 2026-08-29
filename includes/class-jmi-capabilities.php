@@ -14,7 +14,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class JMI_Capabilities {
 
-	const OPTION_NAME = 'jmi_capabilities';
+	const OPTION_NAME   = 'jmi_capabilities';
 	const PROBE_VERSION = 1;
 
 	/**
@@ -114,15 +114,19 @@ final class JMI_Capabilities {
 		}
 
 		$target_path = $source_path . '.' . $extension;
-		$probe_image = base64_decode(
+		// A fixed 1x1 PNG fixture used only for a local image-editor probe.
+		$probe_image = base64_decode( // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode
 			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
 			true
 		);
 
-		if ( false === $probe_image || false === file_put_contents( $source_path, $probe_image ) ) {
+		// The probe path comes from wp_tempnam() and requires no filesystem credentials.
+		if ( false === $probe_image || false === file_put_contents( $source_path, $probe_image ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
 			wp_delete_file( $source_path );
 			return $this->result( 'unknown', 'probe_source_unavailable' );
 		}
+
+		$saved_path = $target_path;
 
 		try {
 			$editor = wp_get_image_editor( $source_path );
@@ -155,6 +159,9 @@ final class JMI_Capabilities {
 			return $this->result( 'unavailable', 'unexpected_editor_failure' );
 		} finally {
 			wp_delete_file( $source_path );
+			if ( $saved_path !== $target_path ) {
+				wp_delete_file( $saved_path );
+			}
 			wp_delete_file( $target_path );
 		}
 	}
@@ -211,7 +218,6 @@ final class JMI_Capabilities {
 			}
 		}
 
-		return hash( 'sha256', serialize( $parts ) );
+		return hash( 'sha256', wp_json_encode( $parts ) );
 	}
 }
-

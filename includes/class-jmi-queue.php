@@ -14,13 +14,17 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class JMI_Queue {
 
-	const PROCESS_HOOK = 'jmi_process_attachment';
-	const SCAN_HOOK = 'jmi_scan_library';
+	const PROCESS_HOOK  = 'jmi_process_attachment';
+	const SCAN_HOOK     = 'jmi_scan_library';
 	const STATUS_OPTION = 'jmi_queue_status';
-	const LOCK_PREFIX = 'jmi_attachment_lock_';
-	const LOCK_TTL = 900;
+	const LOCK_PREFIX   = 'jmi_attachment_lock_';
+	const LOCK_TTL      = 900;
 
-	/** @var JMI_Converter */
+	/**
+	 * Attachment converter.
+	 *
+	 * @var JMI_Converter
+	 */
 	private $converter;
 
 	/**
@@ -119,17 +123,17 @@ final class JMI_Queue {
 		update_option(
 			self::STATUS_OPTION,
 			array(
-				'status'        => 'queued',
-				'reason'        => sanitize_key( $reason ),
-				'cursor'        => 0,
-				'scheduled'     => 0,
-				'processed'     => 0,
-				'generated'     => 0,
-				'reused'        => 0,
-				'skipped'       => 0,
-				'failed'        => 0,
-				'last_reason'   => '',
-				'last_update'   => time(),
+				'status'      => 'queued',
+				'reason'      => sanitize_key( $reason ),
+				'cursor'      => 0,
+				'scheduled'   => 0,
+				'processed'   => 0,
+				'generated'   => 0,
+				'reused'      => 0,
+				'skipped'     => 0,
+				'failed'      => 0,
+				'last_reason' => '',
+				'last_update' => time(),
 			),
 			false
 		);
@@ -162,7 +166,8 @@ final class JMI_Queue {
 			$cursor,
 			$limit
 		);
-		$attachment_ids = $wpdb->get_col( $query ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+		// A cursor avoids increasingly expensive offsets on large media libraries.
+		$attachment_ids = $wpdb->get_col( $query ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
 
 		if ( empty( $attachment_ids ) ) {
 			$status['status']      = 'complete';

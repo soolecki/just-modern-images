@@ -8,5 +8,3 @@ build/
 dist/
 coverage/
 .phpunit.result.cache
-composer.lock
-

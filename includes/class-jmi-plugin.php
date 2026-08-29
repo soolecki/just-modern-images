@@ -14,13 +14,25 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class JMI_Plugin {
 
-	/** @var JMI_Plugin|null */
+	/**
+	 * Shared plugin instance.
+	 *
+	 * @var JMI_Plugin|null
+	 */
 	private static $instance;
 
-	/** @var JMI_Queue */
+	/**
+	 * Background conversion queue.
+	 *
+	 * @var JMI_Queue
+	 */
 	private $queue;
 
-	/** @var JMI_Manifest */
+	/**
+	 * Attachment manifest storage.
+	 *
+	 * @var JMI_Manifest
+	 */
 	private $manifest;
 
 	/**
@@ -40,14 +52,14 @@ final class JMI_Plugin {
 	 * Initialize plugin services.
 	 */
 	private function __construct() {
-		$profiles          = new JMI_Quality_Profiles();
-		$capabilities      = new JMI_Capabilities();
-		$this->manifest    = new JMI_Manifest();
-		$inventory         = new JMI_Source_Inventory();
-		$converter         = new JMI_Converter( $profiles, $capabilities, $inventory, $this->manifest );
-		$this->queue       = new JMI_Queue( $converter );
-		$renderer          = new JMI_Renderer( $this->manifest );
-		$settings          = new JMI_Settings( $profiles, $capabilities, $this->queue );
+		$profiles       = new JMI_Quality_Profiles();
+		$capabilities   = new JMI_Capabilities();
+		$this->manifest = new JMI_Manifest();
+		$inventory      = new JMI_Source_Inventory();
+		$converter      = new JMI_Converter( $profiles, $capabilities, $inventory, $this->manifest );
+		$this->queue    = new JMI_Queue( $converter );
+		$renderer       = new JMI_Renderer( $this->manifest );
+		$settings       = new JMI_Settings( $profiles, $capabilities, $this->queue );
 
 		$this->queue->register();
 		$renderer->register();
@@ -98,4 +110,3 @@ final class JMI_Plugin {
 		$this->manifest->delete_variants( absint( $attachment_id ) );
 	}
 }
-

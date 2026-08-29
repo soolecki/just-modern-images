@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<ruleset name="Just Modern Images">
+	<description>WordPress coding standards for Just Modern Images.</description>
+
+	<arg name="basepath" value="."/>
+	<arg name="colors"/>
+	<arg name="extensions" value="php"/>
+	<arg value="sp"/>
+
+	<config name="minimum_supported_wp_version" value="6.5"/>
+
+	<file>just-modern-images.php</file>
+	<file>includes</file>
+
+	<exclude-pattern>vendor/*</exclude-pattern>
+
+	<rule ref="WordPress"/>
+</ruleset>
+

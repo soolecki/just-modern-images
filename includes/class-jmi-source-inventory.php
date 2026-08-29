@@ -58,7 +58,7 @@ final class JMI_Source_Inventory {
 			$source = $this->build_source( sanitize_key( $size_name ), $path );
 			if ( $source ) {
 				$sources[ sanitize_key( $size_name ) ] = $source;
-				$seen[ $key ]                         = true;
+				$seen[ $key ]                          = true;
 			}
 		}
 
@@ -127,4 +127,3 @@ final class JMI_Source_Inventory {
 		);
 	}
 }
-

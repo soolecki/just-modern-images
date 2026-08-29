@@ -16,7 +16,11 @@ final class JMI_Renderer {
 
 	const PROCESSED_ATTRIBUTE = 'data-jmi-processed';
 
-	/** @var JMI_Manifest */
+	/**
+	 * Attachment manifest storage.
+	 *
+	 * @var JMI_Manifest
+	 */
 	private $manifest;
 
 	/**
@@ -64,6 +68,8 @@ final class JMI_Renderer {
 	 * @return mixed
 	 */
 	public function filter_attachment_image( $html, $attachment_id, $size, $icon, $attr ) {
+		unset( $size, $icon, $attr );
+
 		return $this->render( $html, $attachment_id, 'wp_get_attachment_image' );
 	}
 
@@ -312,4 +318,3 @@ final class JMI_Renderer {
 		return true;
 	}
 }
-

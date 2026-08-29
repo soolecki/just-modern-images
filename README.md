@@ -14,7 +14,20 @@ The project is currently under active development and is not ready for productio
 
 ## Current status
 
-The initial commit preserves the existing prototype as a reference. Its internals will be revised before the first public release.
+The original prototype has been replaced with a fail-safe conversion pipeline.
+The project is still in pre-release development and needs broader integration
+testing before it is installed on production sites.
+
+## Development
+
+Install the development tools with Composer, then run:
+
+```bash
+composer test
+composer lint
+```
+
+The production plugin has no Composer or JavaScript runtime dependencies.
 
 ## License
 
