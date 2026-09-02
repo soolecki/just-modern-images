@@ -19,8 +19,10 @@ Version 0.11 adds observable Media Library state, explicit manual priority,
 request-based processing priority without visitor tracking, and a graphical
 progress screen. Version 0.11.1 adds actionable diagnostics, per-server capability
 profiles for clustered installations, and immutable output publishing designed
-for shared filesystems. The project is still in pre-release development and needs
-broader integration testing before a public WordPress.org release.
+for shared filesystems. Version 0.11.2 keeps adjacent component revisions
+compatible while independent application servers refresh their opcode caches.
+The project is still in pre-release development and needs broader integration
+testing before a public WordPress.org release.
 
 ## Development
 

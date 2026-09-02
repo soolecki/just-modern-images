@@ -214,6 +214,7 @@ confirmation for deletion.
 | Avatar or profile crop | Ignore until it becomes a stable attachment |
 | CSS background | Original in first release; add narrow block support after tests |
 | Hardcoded image URL | Original; no full-page output rewriting |
+| Rolling update with stale opcode cache | Keep adjacent component revisions compatible, defer unsafe probes, and show a reload notice |
 | Attachment deletion | Remove companions recorded in that attachment's manifest |
 | Plugin deactivation | Stop rendering and processing; originals work immediately |
 | Plugin uninstall | Remove plugin settings, metadata, and recorded companions |

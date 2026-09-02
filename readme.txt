@@ -3,7 +3,7 @@ Tags: webp, avif, images, performance, optimization
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.11.1
+Stable tag: 0.11.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -92,6 +92,13 @@ The plugin uses normal WordPress upload URLs and provides a filter for CDN integ
 Not in this release. The first release intentionally covers attachment images rendered through standard WordPress APIs without buffering or rewriting the entire page.
 
 == Changelog ==
+
+= 0.11.2 =
+
+* Prevented critical errors when different application servers temporarily use cached plugin components from adjacent releases.
+* Added compatibility between old and new manifest cleanup APIs during rolling updates.
+* Deferred an on-demand capability probe safely when the current request still uses the older probe component.
+* Added a visible notice when a server is waiting to reload the current plugin version.
 
 = 0.11.1 =
 
