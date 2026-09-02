@@ -398,6 +398,11 @@ final class JMI_Media_Admin {
 		);
 		$label  = $labels[ $status['state'] ] ?? $labels['pending'];
 		$html   = '<span class="jmi-badge jmi-badge--' . esc_attr( $label[1] ) . '">' . esc_html( $label[0] ) . '</span>';
+		$reason = sanitize_key( $status['reason'] ?? '' );
+
+		if ( $reason && in_array( $status['state'], array( 'failed', 'stale', 'skipped' ), true ) ) {
+			$html .= '<span class="jmi-status-reason">' . esc_html( JMI_Diagnostics::label( $reason ) ) . ' <code>' . esc_html( $reason ) . '</code></span>';
+		}
 
 		if ( ! $detailed ) {
 			return $html;
@@ -428,13 +433,20 @@ final class JMI_Media_Admin {
 	 * @return string
 	 */
 	private function format_markup( $label, $mime_type, $manifest, $capabilities ) {
-		$total = 0;
-		$ready = 0;
+		$total   = 0;
+		$ready   = 0;
+		$reasons = array();
 
 		foreach ( $manifest['sources'] as $source ) {
 			++$total;
-			if ( 'ready' === ( $source['variants'][ $mime_type ]['status'] ?? '' ) ) {
+			$variant = $source['variants'][ $mime_type ] ?? array();
+			if ( 'ready' === ( $variant['status'] ?? '' ) ) {
 				++$ready;
+			}
+
+			$reason = sanitize_key( $variant['warning'] ?? ( $variant['reason'] ?? '' ) );
+			if ( $reason && ! in_array( $reason, array( 'generated', 'recovered_existing' ), true ) ) {
+				$reasons[ $reason ] = true;
 			}
 		}
 
@@ -446,13 +458,22 @@ final class JMI_Media_Admin {
 			$text  = sprintf( __( '%1$d of %2$d sizes', 'just-modern-images' ), $ready, $total );
 			$class = 'warning';
 		} elseif ( 'available' !== ( $capabilities[ $mime_type ]['state'] ?? 'unknown' ) ) {
-			$text  = __( 'Unavailable on this server', 'just-modern-images' );
-			$class = 'muted';
+			$text               = __( 'Unavailable on this server', 'just-modern-images' );
+			$class              = 'muted';
+			$reason             = sanitize_key( $capabilities[ $mime_type ]['reason'] ?? 'not_checked' );
+			$reasons[ $reason ] = true;
 		} else {
 			$text  = __( 'Not ready', 'just-modern-images' );
 			$class = 'muted';
 		}
 
-		return '<div><strong>' . esc_html( $label ) . '</strong><span class="jmi-dot jmi-dot--' . esc_attr( $class ) . '"></span>' . esc_html( $text ) . '</div>';
+		$html = '<div><strong>' . esc_html( $label ) . '</strong><span class="jmi-dot jmi-dot--' . esc_attr( $class ) . '"></span>' . esc_html( $text ) . '</div>';
+
+		if ( $reasons ) {
+			$reason = (string) array_key_first( $reasons );
+			$html  .= '<small class="jmi-format-reason">' . esc_html( JMI_Diagnostics::label( $reason ) ) . ' <code>' . esc_html( $reason ) . '</code></small>';
+		}
+
+		return $html;
 	}
 }

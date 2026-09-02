@@ -69,6 +69,7 @@ final class JMI_Settings {
 		add_action( 'admin_menu', array( $this, 'add_page' ) );
 		add_action( 'admin_init', array( $this, 'register_setting' ) );
 		add_action( 'admin_post_jmi_rebuild', array( $this, 'handle_rebuild' ) );
+		add_action( 'admin_post_jmi_probe', array( $this, 'handle_probe' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_styles' ) );
 		add_action( 'update_option_' . JMI_Quality_Profiles::OPTION_NAME, array( $this, 'handle_quality_change' ), 10, 2 );
 		add_filter( 'plugin_action_links_' . plugin_basename( JMI_PLUGIN_FILE ), array( $this, 'add_action_link' ) );
@@ -116,14 +117,17 @@ final class JMI_Settings {
 			return;
 		}
 
-		$selected     = $this->profiles->selected_key();
-		$capabilities = $this->capabilities->get_all();
-		$status       = $this->queue->status();
-		$stats        = $this->media_status->library_stats( $this->profiles->generation_profile() );
-		$profiles     = $this->profiles->all();
-		$profile      = $profiles[ $selected ];
-		$ready_pct    = $stats['total'] ? (int) round( ( $stats['ready'] / $stats['total'] ) * 100 ) : 0;
-		$reviewed_pct = $stats['total'] ? (int) round( ( $stats['reviewed'] / $stats['total'] ) * 100 ) : 0;
+		$selected            = $this->profiles->selected_key();
+		$server              = $this->capabilities->diagnostic_summary();
+		$capabilities        = $server['formats'];
+		$status              = $this->queue->status();
+		$stats               = $this->media_status->library_stats( $this->profiles->generation_profile() );
+		$profiles            = $this->profiles->all();
+		$profile             = $profiles[ $selected ];
+		$ready_pct           = $stats['total'] ? (int) round( ( $stats['ready'] / $stats['total'] ) * 100 ) : 0;
+		$reviewed_pct        = $stats['total'] ? (int) round( ( $stats['reviewed'] / $stats['total'] ) * 100 ) : 0;
+		$last_reason         = sanitize_key( $status['last_reason'] ?? '' );
+		$attention_media_url = add_query_arg( 'jmi-status', 'attention', admin_url( 'upload.php?mode=list' ) );
 		?>
 		<div class="wrap jmi-admin">
 			<div class="jmi-heading">
@@ -136,6 +140,24 @@ final class JMI_Settings {
 
 			<?php if ( isset( $_GET['jmi-rebuild'] ) ) : // phpcs:ignore WordPress.Security.NonceVerification.Recommended ?>
 				<div class="notice notice-success is-dismissible"><p><?php esc_html_e( 'The Media Library scan has been queued.', 'just-modern-images' ); ?></p></div>
+			<?php endif; ?>
+			<?php if ( isset( $_GET['jmi-probe'] ) ) : // phpcs:ignore WordPress.Security.NonceVerification.Recommended ?>
+				<div class="notice notice-success is-dismissible"><p><?php esc_html_e( 'This server completed a fresh image format check.', 'just-modern-images' ); ?></p></div>
+			<?php endif; ?>
+
+			<?php if ( $stats['failed'] ) : ?>
+				<div class="jmi-alert">
+					<div>
+						<strong>
+							<?php /* translators: %s: number of media items needing attention. */ ?>
+							<?php echo esc_html( sprintf( _n( '%s image needs attention.', '%s images need attention.', $stats['failed'], 'just-modern-images' ), number_format_i18n( $stats['failed'] ) ) ); ?>
+						</strong>
+						<?php if ( $last_reason ) : ?>
+							<span><?php echo esc_html( JMI_Diagnostics::label( $last_reason ) ); ?> <code><?php echo esc_html( $last_reason ); ?></code></span>
+						<?php endif; ?>
+					</div>
+					<a class="button" href="<?php echo esc_url( $attention_media_url ); ?>"><?php esc_html_e( 'Review images', 'just-modern-images' ); ?></a>
+				</div>
 			<?php endif; ?>
 
 			<section class="jmi-overview">
@@ -180,12 +202,21 @@ final class JMI_Settings {
 					<h2><?php esc_html_e( 'Server formats', 'just-modern-images' ); ?></h2>
 					<div class="jmi-capability">
 						<span class="jmi-format-icon">A</span>
-						<div><strong>AVIF</strong><span><?php echo esc_html( $this->capability_label( $capabilities['image/avif'] ?? array() ) ); ?></span></div>
+						<div><strong>AVIF</strong><span><?php echo esc_html( $this->capability_label( $capabilities['image/avif'] ?? array() ) ); ?></span><?php echo wp_kses_post( $this->capability_reason( $capabilities['image/avif'] ?? array() ) ); ?></div>
 					</div>
 					<div class="jmi-capability">
 						<span class="jmi-format-icon">W</span>
-						<div><strong>WebP</strong><span><?php echo esc_html( $this->capability_label( $capabilities['image/webp'] ?? array() ) ); ?></span></div>
+						<div><strong>WebP</strong><span><?php echo esc_html( $this->capability_label( $capabilities['image/webp'] ?? array() ) ); ?></span><?php echo wp_kses_post( $this->capability_reason( $capabilities['image/webp'] ?? array() ) ); ?></div>
 					</div>
+					<p class="jmi-server-note">
+						<?php /* translators: 1: short server environment identifier, 2: number of observed server configurations. */ ?>
+						<?php echo esc_html( sprintf( __( 'Current server: %1$s. Server environments observed: %2$s.', 'just-modern-images' ), $server['environment_id'], number_format_i18n( $server['profile_count'] ) ) ); ?>
+					</p>
+					<form action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" method="post">
+						<input type="hidden" name="action" value="jmi_probe">
+						<?php wp_nonce_field( 'jmi_probe_server' ); ?>
+						<?php submit_button( __( 'Check this server now', 'just-modern-images' ), 'secondary', 'submit', false ); ?>
+					</form>
 				</section>
 
 				<section class="jmi-panel">
@@ -195,9 +226,14 @@ final class JMI_Settings {
 						<div><dt><?php esc_html_e( 'Attachments processed', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( number_format_i18n( (int) $status['processed'] ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Files generated', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( number_format_i18n( (int) $status['generated'] ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Last activity', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->last_activity_label( $status['last_update'] ) ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Last result', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $last_reason ? JMI_Diagnostics::label( $last_reason ) : __( 'No issues recorded', 'just-modern-images' ) ); ?>
+						<?php
+						if ( $last_reason ) :
+							?>
+							<code><?php echo esc_html( $last_reason ); ?></code><?php endif; ?></dd></div>
 					</dl>
 					<?php if ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON ) : ?>
-						<p class="jmi-warning"><?php esc_html_e( 'Built-in WP-Cron is disabled. An external cron runner must call WordPress regularly.', 'just-modern-images' ); ?></p>
+						<p class="jmi-warning"><?php esc_html_e( 'Built-in WP-Cron is disabled, so an external runner must call WordPress regularly. If Last activity keeps changing, the runner is working.', 'just-modern-images' ); ?></p>
 					<?php endif; ?>
 					<form action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" method="post">
 						<input type="hidden" name="action" value="jmi_rebuild">
@@ -240,6 +276,24 @@ final class JMI_Settings {
 		$this->queue->start_scan( 'manual' );
 
 		wp_safe_redirect( add_query_arg( 'jmi-rebuild', '1', admin_url( 'options-general.php?page=' . self::PAGE_SLUG ) ) );
+		exit;
+	}
+
+	/**
+	 * Run a real capability check on the server handling this request.
+	 *
+	 * @return void
+	 */
+	public function handle_probe() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You are not allowed to perform this action.', 'just-modern-images' ) );
+		}
+
+		check_admin_referer( 'jmi_probe_server' );
+		$this->capabilities->probe_all();
+		$this->queue->start_scan( 'capability_checked' );
+
+		wp_safe_redirect( add_query_arg( 'jmi-probe', '1', admin_url( 'options-general.php?page=' . self::PAGE_SLUG ) ) );
 		exit;
 	}
 
@@ -294,6 +348,18 @@ final class JMI_Settings {
 		}
 
 		return __( 'Waiting for a capability check', 'just-modern-images' );
+	}
+
+	/**
+	 * Return a detailed capability explanation with its stable reason code.
+	 *
+	 * @param array<string, mixed> $capability Capability data.
+	 * @return string
+	 */
+	private function capability_reason( $capability ) {
+		$reason = sanitize_key( $capability['reason'] ?? 'not_checked' );
+
+		return '<small>' . esc_html( JMI_Diagnostics::label( $reason ) ) . ' <code>' . esc_html( $reason ) . '</code></small>';
 	}
 
 	/**

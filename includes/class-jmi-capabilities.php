@@ -16,7 +16,9 @@ final class JMI_Capabilities {
 
 	const OPTION_NAME    = 'jmi_capabilities';
 	const HEALTH_OPTION  = 'jmi_format_health';
-	const PROBE_VERSION  = 1;
+	const STORAGE_SCHEMA = 2;
+	const MAX_PROFILES   = 32;
+	const PROBE_VERSION  = 2;
 	const FAILURE_LIMIT  = 3;
 	const FAILURE_WINDOW = 600;
 	const PAUSE_SECONDS  = 3600;
@@ -34,24 +36,39 @@ final class JMI_Capabilities {
 	}
 
 	/**
-	 * Return the last verified capability result.
+	 * Return the last verified capability result for this server environment.
 	 *
 	 * @return array<string, array<string, mixed>>
 	 */
 	public function get_all() {
-		$stored = get_option( self::OPTION_NAME, array() );
+		$fingerprint = $this->fingerprint();
+		$profile     = $this->get_profile( $fingerprint );
 
-		if (
-			! is_array( $stored ) ||
-			empty( $stored['fingerprint'] ) ||
-			! hash_equals( (string) $stored['fingerprint'], $this->fingerprint() ) ||
-			empty( $stored['formats'] ) ||
-			! is_array( $stored['formats'] )
-		) {
+		if ( empty( $profile['formats'] ) || ! is_array( $profile['formats'] ) ) {
 			return $this->unknown_results();
 		}
 
-		return $this->apply_health( $stored['formats'] );
+		return $this->apply_health( $profile['formats'], $fingerprint );
+	}
+
+	/**
+	 * Return safe operational information for the current server environment.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public function diagnostic_summary() {
+		$fingerprint = $this->fingerprint();
+		$storage     = $this->get_storage();
+		$profile     = isset( $storage['profiles'][ $fingerprint ] ) && is_array( $storage['profiles'][ $fingerprint ] )
+			? $storage['profiles'][ $fingerprint ]
+			: array();
+
+		return array(
+			'environment_id' => substr( $fingerprint, 0, 12 ),
+			'checked_at'     => isset( $profile['checked_at'] ) ? (int) $profile['checked_at'] : 0,
+			'profile_count'  => count( $storage['profiles'] ),
+			'formats'        => $this->get_all(),
+		);
 	}
 
 	/**
@@ -67,33 +84,34 @@ final class JMI_Capabilities {
 	}
 
 	/**
-	 * Probe all output formats and persist the results.
+	 * Probe all output formats and persist the results for this environment.
 	 *
 	 * @return array<string, array<string, mixed>>
 	 */
 	public function probe_all() {
-		$results = array();
-		delete_option( self::HEALTH_OPTION );
+		$results     = array();
+		$fingerprint = $this->fingerprint();
+
+		$this->clear_health( $fingerprint );
 
 		foreach ( $this->formats() as $mime_type => $extension ) {
 			$results[ $mime_type ] = $this->probe_format( $mime_type, $extension );
 		}
 
-		update_option(
-			self::OPTION_NAME,
-			array(
-				'fingerprint' => $this->fingerprint(),
-				'checked_at'  => time(),
-				'formats'     => $results,
-			),
-			false
+		$storage                             = $this->get_storage();
+		$storage['profiles'][ $fingerprint ] = array(
+			'checked_at' => time(),
+			'formats'    => $results,
 		);
+		$storage['profiles']                 = $this->prune_profiles( $storage['profiles'] );
+
+		update_option( self::OPTION_NAME, $storage, false );
 
 		return $results;
 	}
 
 	/**
-	 * Remove a cached result so the next worker can probe again.
+	 * Remove cached results so each active server can probe again.
 	 *
 	 * @return void
 	 */
@@ -123,10 +141,13 @@ final class JMI_Capabilities {
 			return;
 		}
 
-		$now    = time();
-		$health = get_option( self::HEALTH_OPTION, array() );
-		$health = is_array( $health ) ? $health : array();
-		$format = isset( $health[ $mime_type ] ) && is_array( $health[ $mime_type ] ) ? $health[ $mime_type ] : array();
+		$now         = time();
+		$fingerprint = $this->fingerprint();
+		$storage     = $this->get_health_storage( $fingerprint );
+		$health      = isset( $storage['profiles'][ $fingerprint ] ) && is_array( $storage['profiles'][ $fingerprint ] )
+			? $storage['profiles'][ $fingerprint ]
+			: array();
+		$format      = isset( $health[ $mime_type ] ) && is_array( $health[ $mime_type ] ) ? $health[ $mime_type ] : array();
 
 		if ( empty( $format['last_failure'] ) || (int) $format['last_failure'] < $now - self::FAILURE_WINDOW ) {
 			$format['failures'] = 0;
@@ -140,8 +161,11 @@ final class JMI_Capabilities {
 			$format['paused_until'] = $now + self::PAUSE_SECONDS;
 		}
 
-		$health[ $mime_type ] = $format;
-		update_option( self::HEALTH_OPTION, $health, false );
+		$health[ $mime_type ]                = $format;
+		$health['_updated_at']               = $now;
+		$storage['profiles'][ $fingerprint ] = $health;
+		$storage['profiles']                 = $this->prune_profiles( $storage['profiles'] );
+		update_option( self::HEALTH_OPTION, $storage, false );
 	}
 
 	/**
@@ -225,7 +249,7 @@ final class JMI_Capabilities {
 	}
 
 	/**
-	 * Return unknown results when the environment has changed.
+	 * Return unknown results when this server environment has not been checked.
 	 *
 	 * @return array<string, array<string, mixed>>
 	 */
@@ -242,14 +266,15 @@ final class JMI_Capabilities {
 	/**
 	 * Overlay temporary circuit-breaker state on verified capabilities.
 	 *
-	 * @param array<string, array<string, mixed>> $formats Verified formats.
+	 * @param array<string, array<string, mixed>> $formats     Verified formats.
+	 * @param string                              $fingerprint Environment fingerprint.
 	 * @return array<string, array<string, mixed>>
 	 */
-	private function apply_health( $formats ) {
-		$health = get_option( self::HEALTH_OPTION, array() );
-		if ( ! is_array( $health ) ) {
-			return $formats;
-		}
+	private function apply_health( $formats, $fingerprint ) {
+		$storage = $this->get_health_storage( $fingerprint );
+		$health  = isset( $storage['profiles'][ $fingerprint ] ) && is_array( $storage['profiles'][ $fingerprint ] )
+			? $storage['profiles'][ $fingerprint ]
+			: array();
 
 		foreach ( $health as $mime_type => $format ) {
 			if (
@@ -283,6 +308,124 @@ final class JMI_Capabilities {
 	}
 
 	/**
+	 * Read capability storage and migrate the previous single-profile shape.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function get_storage() {
+		$stored  = get_option( self::OPTION_NAME, array() );
+		$storage = array(
+			'schema'   => self::STORAGE_SCHEMA,
+			'profiles' => array(),
+		);
+
+		if ( ! is_array( $stored ) ) {
+			return $storage;
+		}
+
+		if ( isset( $stored['profiles'] ) && is_array( $stored['profiles'] ) ) {
+			$storage['profiles'] = $stored['profiles'];
+			return $storage;
+		}
+
+		if ( ! empty( $stored['fingerprint'] ) && ! empty( $stored['formats'] ) && is_array( $stored['formats'] ) ) {
+			$storage['profiles'][ (string) $stored['fingerprint'] ] = array(
+				'checked_at' => isset( $stored['checked_at'] ) ? (int) $stored['checked_at'] : 0,
+				'formats'    => $stored['formats'],
+			);
+		}
+
+		return $storage;
+	}
+
+	/**
+	 * Return a capability profile for one environment.
+	 *
+	 * @param string $fingerprint Environment fingerprint.
+	 * @return array<string, mixed>
+	 */
+	private function get_profile( $fingerprint ) {
+		$storage = $this->get_storage();
+
+		return isset( $storage['profiles'][ $fingerprint ] ) && is_array( $storage['profiles'][ $fingerprint ] )
+			? $storage['profiles'][ $fingerprint ]
+			: array();
+	}
+
+	/**
+	 * Read health storage and migrate the previous global shape.
+	 *
+	 * @param string $fingerprint Current environment fingerprint.
+	 * @return array<string, mixed>
+	 */
+	private function get_health_storage( $fingerprint ) {
+		$stored  = get_option( self::HEALTH_OPTION, array() );
+		$storage = array(
+			'schema'   => self::STORAGE_SCHEMA,
+			'profiles' => array(),
+		);
+
+		if ( ! is_array( $stored ) ) {
+			return $storage;
+		}
+
+		if ( isset( $stored['profiles'] ) && is_array( $stored['profiles'] ) ) {
+			$storage['profiles'] = $stored['profiles'];
+			return $storage;
+		}
+
+		foreach ( $this->formats() as $mime_type => $extension ) {
+			if ( isset( $stored[ $mime_type ] ) && is_array( $stored[ $mime_type ] ) ) {
+				$storage['profiles'][ $fingerprint ][ $mime_type ] = $stored[ $mime_type ];
+			}
+		}
+
+		return $storage;
+	}
+
+	/**
+	 * Remove circuit-breaker data for one server environment.
+	 *
+	 * @param string $fingerprint Environment fingerprint.
+	 * @return void
+	 */
+	private function clear_health( $fingerprint ) {
+		$storage = $this->get_health_storage( $fingerprint );
+		unset( $storage['profiles'][ $fingerprint ] );
+
+		if ( empty( $storage['profiles'] ) ) {
+			delete_option( self::HEALTH_OPTION );
+			return;
+		}
+
+		update_option( self::HEALTH_OPTION, $storage, false );
+	}
+
+	/**
+	 * Keep option size bounded on long-lived and autoscaled installations.
+	 *
+	 * @param array<string, array<string, mixed>> $profiles Stored profiles.
+	 * @return array<string, array<string, mixed>>
+	 */
+	private function prune_profiles( $profiles ) {
+		if ( count( $profiles ) <= self::MAX_PROFILES ) {
+			return $profiles;
+		}
+
+		uasort(
+			$profiles,
+			static function ( $left, $right ) {
+				$left_time  = isset( $left['checked_at'] ) ? (int) $left['checked_at'] : (int) ( $left['_updated_at'] ?? 0 );
+				$right_time = isset( $right['checked_at'] ) ? (int) $right['checked_at'] : (int) ( $right['_updated_at'] ?? 0 );
+
+				return $right_time <=> $left_time;
+			}
+		);
+
+		return array_slice( $profiles, 0, self::MAX_PROFILES, true );
+	}
+
+	/**
 	 * Identify changes that can alter image editor support.
 	 *
 	 * @return string
@@ -290,6 +433,7 @@ final class JMI_Capabilities {
 	private function fingerprint() {
 		$parts = array(
 			'probe'     => self::PROBE_VERSION,
+			'server'    => function_exists( 'gethostname' ) ? gethostname() : php_uname( 'n' ),
 			'php'       => PHP_VERSION,
 			'wordpress' => get_bloginfo( 'version' ),
 			'gd'        => function_exists( 'gd_info' ) ? gd_info() : false,

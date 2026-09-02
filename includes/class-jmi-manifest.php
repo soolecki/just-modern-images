@@ -30,11 +30,15 @@ final class JMI_Manifest {
 			! is_array( $manifest ) ||
 			empty( $manifest['schema'] ) ||
 			self::SCHEMA_VERSION !== (int) $manifest['schema'] ||
-			empty( $manifest['sources'] ) ||
+			! isset( $manifest['sources'] ) ||
 			! is_array( $manifest['sources'] )
 		) {
 			return $this->empty_manifest();
 		}
+
+		$manifest['retired'] = isset( $manifest['retired'] ) && is_array( $manifest['retired'] )
+			? $manifest['retired']
+			: array();
 
 		return $manifest;
 	}
@@ -49,8 +53,13 @@ final class JMI_Manifest {
 	public function save( $attachment_id, array $manifest ) {
 		$manifest['schema']     = self::SCHEMA_VERSION;
 		$manifest['updated_at'] = time();
+		$saved                  = update_post_meta( $attachment_id, self::META_KEY, $manifest );
 
-		return false !== update_post_meta( $attachment_id, self::META_KEY, $manifest );
+		if ( false !== $saved ) {
+			return true;
+		}
+
+		return get_post_meta( $attachment_id, self::META_KEY, true ) === $manifest;
 	}
 
 	/**
@@ -64,7 +73,82 @@ final class JMI_Manifest {
 			'generation_profile' => '',
 			'updated_at'         => 0,
 			'sources'            => array(),
+			'retired'            => array(),
 		);
+	}
+
+	/**
+	 * Carry replaced files for a grace period before removing them.
+	 *
+	 * Cached HTML may still reference an older immutable companion after the
+	 * manifest starts advertising its replacement.
+	 *
+	 * @param array<string, mixed> $previous      Previous manifest.
+	 * @param array<string, mixed> $next          New manifest.
+	 * @param int                  $attachment_id Attachment ID.
+	 * @return array<string, mixed>
+	 */
+	public function prepare_replacement( $previous, $next, $attachment_id ) {
+		$now       = time();
+		$retention = (int) apply_filters( 'jmi_retired_variant_retention', 7 * DAY_IN_SECONDS, $attachment_id );
+		$retention = max( DAY_IN_SECONDS, $retention );
+		$retired   = isset( $previous['retired'] ) && is_array( $previous['retired'] ) ? $previous['retired'] : array();
+		$active    = $this->ready_paths( $next );
+		$replaced  = array_diff_key( $this->ready_paths( $previous ), $active );
+
+		foreach ( array_keys( $replaced ) as $relative_path ) {
+			$retired[ $relative_path ] = max( (int) ( $retired[ $relative_path ] ?? 0 ), $now + $retention );
+		}
+
+		foreach ( array_keys( $active ) as $relative_path ) {
+			unset( $retired[ $relative_path ] );
+		}
+
+		$next['retired'] = $retired;
+
+		return $next;
+	}
+
+	/**
+	 * Delete retired files after their grace period.
+	 *
+	 * @param int $attachment_id Attachment ID.
+	 * @return int Number of deleted files.
+	 */
+	public function cleanup_retired_variants( $attachment_id ) {
+		$manifest = $this->get( $attachment_id );
+		$retired  = $manifest['retired'];
+		$deleted  = 0;
+		$changed  = false;
+		$now      = time();
+
+		foreach ( $retired as $relative_path => $delete_after ) {
+			if ( (int) $delete_after > $now ) {
+				continue;
+			}
+
+			$path = $this->resolve_variant_path( $relative_path );
+			if ( $path && file_exists( $path ) ) {
+				wp_delete_file( $path );
+				if ( file_exists( $path ) ) {
+					continue;
+				}
+				++$deleted;
+			}
+
+			unset( $manifest['retired'][ $relative_path ] );
+			$changed = true;
+		}
+
+		if ( $changed ) {
+			$this->save( $attachment_id, $manifest );
+		}
+
+		if ( $deleted ) {
+			do_action( 'jmi_variants_deleted', $attachment_id, $deleted );
+		}
+
+		return $deleted;
 	}
 
 	/**
@@ -76,52 +160,14 @@ final class JMI_Manifest {
 	 */
 	public function delete_variants( $attachment_id, $delete_meta = true ) {
 		$manifest = $this->get( $attachment_id );
+		$paths    = $this->ready_paths( $manifest );
 		$deleted  = 0;
 
-		foreach ( $manifest['sources'] as $source ) {
-			if ( empty( $source['variants'] ) || ! is_array( $source['variants'] ) ) {
-				continue;
-			}
-
-			foreach ( $source['variants'] as $variant ) {
-				if ( empty( $variant['relative_path'] ) || 'ready' !== ( $variant['status'] ?? '' ) ) {
-					continue;
-				}
-
-				$path = $this->resolve_variant_path( $variant['relative_path'] );
-				if ( $path && file_exists( $path ) ) {
-					wp_delete_file( $path );
-					if ( ! file_exists( $path ) ) {
-						++$deleted;
-					}
-				}
-			}
+		foreach ( array_keys( $manifest['retired'] ) as $relative_path ) {
+			$paths[ $relative_path ] = true;
 		}
 
-		if ( $delete_meta ) {
-			delete_post_meta( $attachment_id, self::META_KEY );
-		}
-
-		do_action( 'jmi_variants_deleted', $attachment_id, $deleted );
-
-		return $deleted;
-	}
-
-	/**
-	 * Remove files that are no longer referenced after a successful rebuild.
-	 *
-	 * @param array<string, mixed> $previous      Previous manifest.
-	 * @param array<string, mixed> $next          New manifest.
-	 * @param int                  $attachment_id Attachment ID.
-	 * @return int Number of deleted files.
-	 */
-	public function delete_unreferenced_variants( $previous, $next, $attachment_id ) {
-		$previous_paths = $this->ready_paths( $previous );
-		$next_paths     = $this->ready_paths( $next );
-		$stale_paths    = array_diff_key( $previous_paths, $next_paths );
-		$deleted        = 0;
-
-		foreach ( array_keys( $stale_paths ) as $relative_path ) {
+		foreach ( array_keys( $paths ) as $relative_path ) {
 			$path = $this->resolve_variant_path( $relative_path );
 			if ( $path && file_exists( $path ) ) {
 				wp_delete_file( $path );
@@ -131,9 +177,11 @@ final class JMI_Manifest {
 			}
 		}
 
-		if ( $deleted ) {
-			do_action( 'jmi_variants_deleted', $attachment_id, $deleted );
+		if ( $delete_meta ) {
+			delete_post_meta( $attachment_id, self::META_KEY );
 		}
+
+		do_action( 'jmi_variants_deleted', $attachment_id, $deleted );
 
 		return $deleted;
 	}

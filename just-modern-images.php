@@ -26,6 +26,7 @@ define( 'JMI_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 require_once JMI_PLUGIN_DIR . 'includes/class-jmi-quality-profiles.php';
 require_once JMI_PLUGIN_DIR . 'includes/class-jmi-error-trap.php';
 require_once JMI_PLUGIN_DIR . 'includes/class-jmi-capabilities.php';
+require_once JMI_PLUGIN_DIR . 'includes/class-jmi-diagnostics.php';
 require_once JMI_PLUGIN_DIR . 'includes/class-jmi-manifest.php';
 require_once JMI_PLUGIN_DIR . 'includes/class-jmi-media-status.php';
 require_once JMI_PLUGIN_DIR . 'includes/class-jmi-source-inventory.php';

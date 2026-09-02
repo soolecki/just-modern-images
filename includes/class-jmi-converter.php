@@ -182,8 +182,15 @@ final class JMI_Converter {
 			$summary['state'] = 'skipped';
 		}
 
-		$this->manifest->save( $attachment_id, $next );
-		$this->manifest->delete_unreferenced_variants( $previous, $next, $attachment_id );
+		$next = $this->manifest->prepare_replacement( $previous, $next, $attachment_id );
+		if ( ! $this->manifest->save( $attachment_id, $next ) ) {
+			++$summary['failed'];
+			$summary['last_reason'] = 'manifest_write_failed';
+			$summary['state']       = $usable_variants ? 'stale' : 'failed';
+			return $summary;
+		}
+
+		$this->manifest->cleanup_retired_variants( $attachment_id );
 
 		return $summary;
 	}
@@ -202,8 +209,9 @@ final class JMI_Converter {
 			return $this->outcome( 'skipped', 'memory_budget', $mime_type, $generation_profile );
 		}
 
-		$target_path      = $source['path'] . '.' . $extension;
-		$relative_path    = $source['relative_path'] . '.' . $extension;
+		$token            = $this->variant_token( $source, $mime_type, $generation_profile );
+		$target_path      = $source['path'] . '.jmi-' . $token . '.' . $extension;
+		$relative_path    = $source['relative_path'] . '.jmi-' . $token . '.' . $extension;
 		$target_directory = dirname( $target_path );
 		$temp_filename    = wp_unique_filename(
 			$target_directory,
@@ -211,6 +219,18 @@ final class JMI_Converter {
 		);
 		$temp_path        = $target_directory . DIRECTORY_SEPARATOR . $temp_filename;
 		$saved_path       = $temp_path;
+
+		if ( file_exists( $target_path ) ) {
+			$existing = $this->validate_output( $target_path, $mime_type, $source );
+			if ( 'ready' === $existing['status'] ) {
+				return $this->ready_variant( $mime_type, $relative_path, $generation_profile, $existing, 'recovered_existing' );
+			}
+
+			wp_delete_file( $target_path );
+			if ( file_exists( $target_path ) ) {
+				return $this->outcome( 'failed', 'stale_target_unremovable', $mime_type, $generation_profile );
+			}
+		}
 
 		try {
 			$editor = wp_get_image_editor( $source['path'] );
@@ -248,21 +268,11 @@ final class JMI_Converter {
 				return $this->outcome( $validation['status'], $validation['reason'], $mime_type, $generation_profile );
 			}
 
-			if ( ! $this->move_into_place( $saved_path, $target_path ) ) {
-				return $this->outcome( 'failed', 'finalize_failed', $mime_type, $generation_profile );
+			if ( ! $this->publish_file( $saved_path, $target_path ) ) {
+				return $this->outcome( 'failed', 'publish_copy_failed', $mime_type, $generation_profile );
 			}
 
-			$variant = array(
-				'status'             => 'ready',
-				'reason'             => 'generated',
-				'mime_type'          => $mime_type,
-				'relative_path'      => $relative_path,
-				'width'              => (int) $validation['width'],
-				'height'             => (int) $validation['height'],
-				'bytes'              => (int) $validation['bytes'],
-				'generated_at'       => time(),
-				'generation_profile' => $generation_profile,
-			);
+			$variant = $this->ready_variant( $mime_type, $relative_path, $generation_profile, $validation, 'generated' );
 
 			do_action( 'jmi_variant_generated', $variant, $source );
 
@@ -336,30 +346,49 @@ final class JMI_Converter {
 	}
 
 	/**
-	 * Move a validated file into its deterministic location.
+	 * Publish a validated file under a new immutable name.
 	 *
 	 * @param string $temporary_path Temporary file path.
 	 * @param string $target_path    Final file path.
 	 * @return bool
 	 */
-	private function move_into_place( $temporary_path, $target_path ) {
-		if ( ! file_exists( $target_path ) ) {
-			// A same-directory rename keeps a validated file from being served partially.
-			return @rename( $temporary_path, $target_path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.rename_rename
-		}
-
-		$backup_path = $target_path . '.jmi-backup-' . wp_generate_password( 8, false );
-		if ( ! @rename( $target_path, $backup_path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.rename_rename
+	private function publish_file( $temporary_path, $target_path ) {
+		if ( file_exists( $target_path ) ) {
 			return false;
 		}
 
-		if ( @rename( $temporary_path, $target_path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.rename_rename
-			wp_delete_file( $backup_path );
-			return true;
+		$warning = '';
+		$copied  = JMI_Error_Trap::run(
+			static function () use ( $temporary_path, $target_path ) {
+				return copy( $temporary_path, $target_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_copy
+			},
+			$warning
+		);
+
+		if ( '' !== $warning || ! $copied ) {
+			wp_delete_file( $target_path );
+			return false;
 		}
 
-		@rename( $backup_path, $target_path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,WordPress.WP.AlternativeFunctions.rename_rename
-		return false;
+		$source_size = wp_filesize( $temporary_path );
+		$target_size = wp_filesize( $target_path );
+		$source_hash = hash_file( 'sha256', $temporary_path );
+		$target_hash = hash_file( 'sha256', $target_path );
+
+		if (
+			$source_size < 1 ||
+			$source_size !== $target_size ||
+			! is_string( $source_hash ) ||
+			! is_string( $target_hash ) ||
+			! hash_equals( $source_hash, $target_hash )
+		) {
+			wp_delete_file( $target_path );
+			return false;
+		}
+
+		wp_delete_file( $temporary_path );
+
+		return true;
 	}
 
 	/**
@@ -485,6 +514,52 @@ final class JMI_Converter {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Build a ready variant record.
+	 *
+	 * @param string                    $mime_type          Output MIME type.
+	 * @param string                    $relative_path      Relative upload path.
+	 * @param string                    $generation_profile Generation profile.
+	 * @param array<string, int|string> $validation         Validated image details.
+	 * @param string                    $reason             Result reason.
+	 * @return array<string, mixed>
+	 */
+	private function ready_variant( $mime_type, $relative_path, $generation_profile, $validation, $reason ) {
+		return array(
+			'status'             => 'ready',
+			'reason'             => $reason,
+			'mime_type'          => $mime_type,
+			'relative_path'      => $relative_path,
+			'width'              => (int) $validation['width'],
+			'height'             => (int) $validation['height'],
+			'bytes'              => (int) $validation['bytes'],
+			'generated_at'       => time(),
+			'generation_profile' => $generation_profile,
+		);
+	}
+
+	/**
+	 * Build a stable name token for immutable output.
+	 *
+	 * @param array<string, mixed> $source             Source data.
+	 * @param string               $mime_type          Output MIME type.
+	 * @param string               $generation_profile Generation profile.
+	 * @return string
+	 */
+	private function variant_token( $source, $mime_type, $generation_profile ) {
+		$identity = implode(
+			'|',
+			array(
+				(string) ( $source['signature'] ?? '' ),
+				(string) $mime_type,
+				(string) $generation_profile,
+				JMI_VERSION,
+			)
+		);
+
+		return substr( hash( 'sha256', $identity ), 0, 16 );
 	}
 
 	/**
