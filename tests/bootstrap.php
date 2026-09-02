@@ -250,3 +250,4 @@ require_once dirname( __DIR__ ) . '/includes/class-jmi-media-status.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-converter.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-queue.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-renderer.php';
+require_once dirname( __DIR__ ) . '/includes/class-jmi-settings.php';

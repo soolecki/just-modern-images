@@ -152,6 +152,28 @@ final class JMI_Manifest {
 	}
 
 	/**
+	 * Preserve the cleanup API used by converters cached before version 0.11.1.
+	 *
+	 * Replaced files now enter the normal grace period instead of being removed
+	 * immediately. This method can be removed only after rolling updates from
+	 * older releases no longer need to be supported.
+	 *
+	 * @param array<string, mixed> $previous      Previous manifest.
+	 * @param array<string, mixed> $next          New manifest.
+	 * @param int                  $attachment_id Attachment ID.
+	 * @return int Number of expired files deleted.
+	 */
+	public function delete_unreferenced_variants( $previous, $next, $attachment_id ) {
+		$next = $this->prepare_replacement( $previous, $next, $attachment_id );
+
+		if ( ! $this->save( $attachment_id, $next ) ) {
+			return 0;
+		}
+
+		return $this->cleanup_retired_variants( $attachment_id );
+	}
+
+	/**
 	 * Delete companion files recorded for an attachment.
 	 *
 	 * @param int  $attachment_id Attachment ID.

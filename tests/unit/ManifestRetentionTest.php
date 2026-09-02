@@ -36,6 +36,18 @@ final class ManifestRetentionTest extends TestCase {
 		$this->assertSame( array(), $manifest->get( 44 )['retired'] );
 	}
 
+	public function test_legacy_cleanup_api_uses_the_retention_period(): void {
+		$manifest = new JMI_Manifest();
+		$previous = $this->manifest_with_variant( '2026/legacy.jmi-111.webp' );
+		$next     = $this->manifest_with_variant( '2026/current.jmi-222.webp' );
+
+		$this->assertSame( 0, $manifest->delete_unreferenced_variants( $previous, $next, 55 ) );
+
+		$stored = $manifest->get( 55 );
+		$this->assertArrayHasKey( '2026/legacy.jmi-111.webp', $stored['retired'] );
+		$this->assertArrayNotHasKey( '2026/current.jmi-222.webp', $stored['retired'] );
+	}
+
 	private function manifest_with_variant( string $relative_path ): array {
 		return array(
 			'schema'             => JMI_Manifest::SCHEMA_VERSION,

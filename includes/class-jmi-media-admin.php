@@ -9,6 +9,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+$jmi_diagnostics_file = __DIR__ . '/class-jmi-diagnostics.php';
+if ( ! class_exists( 'JMI_Diagnostics', false ) && is_readable( $jmi_diagnostics_file ) ) {
+	require_once $jmi_diagnostics_file;
+}
+unset( $jmi_diagnostics_file );
+
 /**
  * Makes modern-image processing visible and controllable from Media screens.
  */
@@ -401,7 +407,7 @@ final class JMI_Media_Admin {
 		$reason = sanitize_key( $status['reason'] ?? '' );
 
 		if ( $reason && in_array( $status['state'], array( 'failed', 'stale', 'skipped' ), true ) ) {
-			$html .= '<span class="jmi-status-reason">' . esc_html( JMI_Diagnostics::label( $reason ) ) . ' <code>' . esc_html( $reason ) . '</code></span>';
+			$html .= '<span class="jmi-status-reason">' . esc_html( $this->diagnostic_label( $reason ) ) . ' <code>' . esc_html( $reason ) . '</code></span>';
 		}
 
 		if ( ! $detailed ) {
@@ -471,9 +477,23 @@ final class JMI_Media_Admin {
 
 		if ( $reasons ) {
 			$reason = (string) array_key_first( $reasons );
-			$html  .= '<small class="jmi-format-reason">' . esc_html( JMI_Diagnostics::label( $reason ) ) . ' <code>' . esc_html( $reason ) . '</code></small>';
+			$html  .= '<small class="jmi-format-reason">' . esc_html( $this->diagnostic_label( $reason ) ) . ' <code>' . esc_html( $reason ) . '</code></small>';
 		}
 
 		return $html;
+	}
+
+	/**
+	 * Translate a diagnostic code, with a safe fallback during rolling updates.
+	 *
+	 * @param string $reason Diagnostic reason code.
+	 * @return string
+	 */
+	private function diagnostic_label( $reason ) {
+		if ( class_exists( 'JMI_Diagnostics', false ) && is_callable( array( 'JMI_Diagnostics', 'label' ) ) ) {
+			return JMI_Diagnostics::label( $reason );
+		}
+
+		return __( 'Processing did not complete.', 'just-modern-images' );
 	}
 }

@@ -9,6 +9,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+$jmi_diagnostics_file = __DIR__ . '/class-jmi-diagnostics.php';
+if ( ! class_exists( 'JMI_Diagnostics', false ) && is_readable( $jmi_diagnostics_file ) ) {
+	require_once $jmi_diagnostics_file;
+}
+unset( $jmi_diagnostics_file );
+
 /**
  * Exposes one product choice and a compact operational status.
  */
@@ -118,7 +124,7 @@ final class JMI_Settings {
 		}
 
 		$selected            = $this->profiles->selected_key();
-		$server              = $this->capabilities->diagnostic_summary();
+		$server              = $this->server_summary();
 		$capabilities        = $server['formats'];
 		$status              = $this->queue->status();
 		$stats               = $this->media_status->library_stats( $this->profiles->generation_profile() );
@@ -141,8 +147,13 @@ final class JMI_Settings {
 			<?php if ( isset( $_GET['jmi-rebuild'] ) ) : // phpcs:ignore WordPress.Security.NonceVerification.Recommended ?>
 				<div class="notice notice-success is-dismissible"><p><?php esc_html_e( 'The Media Library scan has been queued.', 'just-modern-images' ); ?></p></div>
 			<?php endif; ?>
-			<?php if ( isset( $_GET['jmi-probe'] ) ) : // phpcs:ignore WordPress.Security.NonceVerification.Recommended ?>
+			<?php if ( isset( $_GET['jmi-probe'] ) && 'deferred' === sanitize_key( wp_unslash( $_GET['jmi-probe'] ) ) ) : // phpcs:ignore WordPress.Security.NonceVerification.Recommended ?>
+				<div class="notice notice-warning is-dismissible"><p><?php esc_html_e( 'The server check was deferred until this server reloads the current plugin version.', 'just-modern-images' ); ?></p></div>
+			<?php elseif ( isset( $_GET['jmi-probe'] ) ) : // phpcs:ignore WordPress.Security.NonceVerification.Recommended ?>
 				<div class="notice notice-success is-dismissible"><p><?php esc_html_e( 'This server completed a fresh image format check.', 'just-modern-images' ); ?></p></div>
+			<?php endif; ?>
+			<?php if ( $server['rolling_update'] ) : ?>
+				<div class="notice notice-warning"><p><?php esc_html_e( 'This server is still using an older cached plugin component. Processing remains safe and will resume after the server reloads the current version.', 'just-modern-images' ); ?></p></div>
 			<?php endif; ?>
 
 			<?php if ( $stats['failed'] ) : ?>
@@ -153,7 +164,7 @@ final class JMI_Settings {
 							<?php echo esc_html( sprintf( _n( '%s image needs attention.', '%s images need attention.', $stats['failed'], 'just-modern-images' ), number_format_i18n( $stats['failed'] ) ) ); ?>
 						</strong>
 						<?php if ( $last_reason ) : ?>
-							<span><?php echo esc_html( JMI_Diagnostics::label( $last_reason ) ); ?> <code><?php echo esc_html( $last_reason ); ?></code></span>
+							<span><?php echo esc_html( $this->diagnostic_label( $last_reason ) ); ?> <code><?php echo esc_html( $last_reason ); ?></code></span>
 						<?php endif; ?>
 					</div>
 					<a class="button" href="<?php echo esc_url( $attention_media_url ); ?>"><?php esc_html_e( 'Review images', 'just-modern-images' ); ?></a>
@@ -226,7 +237,7 @@ final class JMI_Settings {
 						<div><dt><?php esc_html_e( 'Attachments processed', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( number_format_i18n( (int) $status['processed'] ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Files generated', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( number_format_i18n( (int) $status['generated'] ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Last activity', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->last_activity_label( $status['last_update'] ) ); ?></dd></div>
-						<div><dt><?php esc_html_e( 'Last result', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $last_reason ? JMI_Diagnostics::label( $last_reason ) : __( 'No issues recorded', 'just-modern-images' ) ); ?>
+						<div><dt><?php esc_html_e( 'Last result', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $last_reason ? $this->diagnostic_label( $last_reason ) : __( 'No issues recorded', 'just-modern-images' ) ); ?>
 						<?php
 						if ( $last_reason ) :
 							?>
@@ -290,10 +301,16 @@ final class JMI_Settings {
 		}
 
 		check_admin_referer( 'jmi_probe_server' );
-		$this->capabilities->probe_all();
+		$probe_result = 'deferred';
+		if ( method_exists( $this->capabilities, 'diagnostic_summary' ) ) {
+			$this->capabilities->probe_all();
+			$probe_result = '1';
+		} else {
+			$this->capabilities->invalidate();
+		}
 		$this->queue->start_scan( 'capability_checked' );
 
-		wp_safe_redirect( add_query_arg( 'jmi-probe', '1', admin_url( 'options-general.php?page=' . self::PAGE_SLUG ) ) );
+		wp_safe_redirect( add_query_arg( 'jmi-probe', $probe_result, admin_url( 'options-general.php?page=' . self::PAGE_SLUG ) ) );
 		exit;
 	}
 
@@ -359,7 +376,45 @@ final class JMI_Settings {
 	private function capability_reason( $capability ) {
 		$reason = sanitize_key( $capability['reason'] ?? 'not_checked' );
 
-		return '<small>' . esc_html( JMI_Diagnostics::label( $reason ) ) . ' <code>' . esc_html( $reason ) . '</code></small>';
+		return '<small>' . esc_html( $this->diagnostic_label( $reason ) ) . ' <code>' . esc_html( $reason ) . '</code></small>';
+	}
+
+	/**
+	 * Return capability details without assuming every cached component is current.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function server_summary() {
+		if ( method_exists( $this->capabilities, 'diagnostic_summary' ) ) {
+			$summary                   = $this->capabilities->diagnostic_summary();
+			$summary['rolling_update'] = version_compare( JMI_VERSION, '0.11.2', '<' );
+			return $summary;
+		}
+
+		$formats = method_exists( $this->capabilities, 'get_all' )
+			? $this->capabilities->get_all()
+			: array();
+
+		return array(
+			'environment_id' => __( 'reloading', 'just-modern-images' ),
+			'profile_count'  => 1,
+			'formats'        => $formats,
+			'rolling_update' => true,
+		);
+	}
+
+	/**
+	 * Translate a diagnostic code, with a safe fallback during rolling updates.
+	 *
+	 * @param string $reason Diagnostic reason code.
+	 * @return string
+	 */
+	private function diagnostic_label( $reason ) {
+		if ( class_exists( 'JMI_Diagnostics', false ) && is_callable( array( 'JMI_Diagnostics', 'label' ) ) ) {
+			return JMI_Diagnostics::label( $reason );
+		}
+
+		return __( 'Processing did not complete.', 'just-modern-images' );
 	}
 
 	/**

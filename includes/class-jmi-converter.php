@@ -182,17 +182,43 @@ final class JMI_Converter {
 			$summary['state'] = 'skipped';
 		}
 
-		$next = $this->manifest->prepare_replacement( $previous, $next, $attachment_id );
-		if ( ! $this->manifest->save( $attachment_id, $next ) ) {
+		if ( ! $this->publish_manifest( $attachment_id, $previous, $next ) ) {
 			++$summary['failed'];
 			$summary['last_reason'] = 'manifest_write_failed';
 			$summary['state']       = $usable_variants ? 'stale' : 'failed';
 			return $summary;
 		}
 
-		$this->manifest->cleanup_retired_variants( $attachment_id );
-
 		return $summary;
+	}
+
+	/**
+	 * Publish a manifest across rolling upgrades of the manifest component.
+	 *
+	 * @param int                  $attachment_id Attachment ID.
+	 * @param array<string, mixed> $previous      Previous manifest.
+	 * @param array<string, mixed> $next          New manifest.
+	 * @return bool Whether publication completed.
+	 */
+	private function publish_manifest( $attachment_id, $previous, $next ) {
+		$supports_retirement = method_exists( $this->manifest, 'prepare_replacement' );
+
+		if ( $supports_retirement ) {
+			$next = $this->manifest->prepare_replacement( $previous, $next, $attachment_id );
+		}
+
+		$saved = $this->manifest->save( $attachment_id, $next );
+		if ( $supports_retirement && ! $saved ) {
+			return false;
+		}
+
+		if ( $supports_retirement && method_exists( $this->manifest, 'cleanup_retired_variants' ) ) {
+			$this->manifest->cleanup_retired_variants( $attachment_id );
+		} elseif ( method_exists( $this->manifest, 'delete_unreferenced_variants' ) ) {
+			$this->manifest->delete_unreferenced_variants( $previous, $next, $attachment_id );
+		}
+
+		return true;
 	}
 
 	/**
