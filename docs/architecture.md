@@ -141,6 +141,16 @@ Jobs are:
 - safe to retry after a fatal request or missed cron event;
 - observable from one small status panel.
 
+The library scan owns one database-backed worker lock shared by all application
+servers. Within one `wp-cron.php` request, every Just Modern Images event shares
+the same adaptive budget: at most 20 seconds and 50 attachment attempts by
+default. The worker predicts the next image from the average duration observed
+in the current request and yields with a safety reserve. It also stops at 80%
+of the PHP memory limit and preserves five seconds before PHP's execution limit.
+These limits are bounded filters for hosting integrations, not product settings.
+The cursor is persisted after every attempted attachment so a timeout, fatal
+error, or missed cron request cannot restart a large library from the beginning.
+
 The queue has four lanes, in descending order: a manual Media Library request,
 a new upload, an attachment needed by a frontend response, and the background
 library scan. A higher-priority request may move an already scheduled job

@@ -3,7 +3,7 @@ Tags: webp, avif, images, performance, optimization
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.11.2
+Stable tag: 0.11.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -56,6 +56,7 @@ The plugin processes images on your own server. It does not contact an external 
 3. Leave the default Standard quality selected, or choose another profile under Settings > Just Modern Images.
 
 Existing images are queued automatically. WordPress processes the queue through WP-Cron in small, retry-safe jobs.
+Each cron request uses an adaptive worker budget. Fast servers continue with more images, while the worker yields before the safe time, memory, or per-run image limit is exhausted.
 
 == Frequently Asked Questions ==
 
@@ -83,6 +84,10 @@ The source may be unavailable locally, the server may not support the format rel
 
 The Media Library is refreshed in the background. Existing valid modern files remain active until verified replacements are ready. Images selected manually, newly uploaded, or needed by a frontend response are processed before the remaining library backfill.
 
+= How much work happens during one cron request? =
+
+The worker measures how long completed images take and starts another only when a safe reserve remains. By default it may use up to 20 seconds and 50 images across all Just Modern Images events in one request. It also yields at 80% of the PHP memory limit and leaves five seconds before the PHP execution limit. These are internal safety limits, not settings that site owners need to manage.
+
 = Does it work with a CDN? =
 
 The plugin uses normal WordPress upload URLs and provides a filter for CDN integrations. A CDN or offload plugin must make generated companion files available just like other files in the uploads directory.
@@ -92,6 +97,15 @@ The plugin uses normal WordPress upload URLs and provides a filter for CDN integ
 Not in this release. The first release intentionally covers attachment images rendered through standard WordPress APIs without buffering or rewriting the entire page.
 
 == Changelog ==
+
+= 0.11.3 =
+
+* Added an adaptive cron worker that continues processing while safe time and memory remain.
+* Applied one shared workload budget across all image events dispatched in the same cron request.
+* Added a shared worker lock so overlapping cron calls on clustered sites do not multiply image load.
+* Added the most recent worker workload and stop reason to the settings screen.
+* Preserved manual, upload, and request-based priority when a worker yields and requeues an image.
+* Fixed early translation loading notices introduced by WordPress 6.7.
 
 = 0.11.2 =
 

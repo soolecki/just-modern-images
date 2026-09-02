@@ -21,8 +21,10 @@ progress screen. Version 0.11.1 adds actionable diagnostics, per-server capabili
 profiles for clustered installations, and immutable output publishing designed
 for shared filesystems. Version 0.11.2 keeps adjacent component revisions
 compatible while independent application servers refresh their opcode caches.
-The project is still in pre-release development and needs broader integration
-testing before a public WordPress.org release.
+Version 0.11.3 adds request-wide adaptive cron budgets and one shared worker lock
+for overlapping clustered cron calls. The project is still in pre-release
+development and needs broader integration testing before a public WordPress.org
+release.
 
 ## Development
 
