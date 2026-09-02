@@ -97,6 +97,7 @@ Not in this release. The first release intentionally covers attachment images re
 
 * Added plain-language processing diagnostics and stable reason codes to Settings and Media Library views.
 * Added an on-demand real AVIF and WebP server check.
+* Fixed capability checks in cron, CLI, and activation requests where the WordPress temporary-file API is not loaded by default.
 * Kept capability and encoder-health results separate for every server environment in a cluster.
 * Switched generated companions to immutable names that do not replace an active file on shared storage.
 * Added recovery of complete files left by an interrupted run and explicit database-publication failure handling.

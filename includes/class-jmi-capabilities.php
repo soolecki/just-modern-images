@@ -180,7 +180,7 @@ final class JMI_Capabilities {
 			return $this->result( 'unavailable', 'editor_unsupported' );
 		}
 
-		$source_path = wp_tempnam( 'jmi-probe.png' );
+		$source_path = $this->temporary_probe_path();
 		if ( ! $source_path ) {
 			return $this->result( 'unknown', 'temporary_file_unavailable' );
 		}
@@ -246,6 +246,24 @@ final class JMI_Capabilities {
 			}
 			wp_delete_file( $target_path );
 		}
+	}
+
+	/**
+	 * Create a probe path even when the WordPress filesystem API was not loaded.
+	 *
+	 * Cron, CLI, and some activation paths do not include wp-admin/includes/file.php.
+	 *
+	 * @return string|false
+	 */
+	private function temporary_probe_path() {
+		if ( ! function_exists( 'wp_tempnam' ) ) {
+			$file_api = ABSPATH . 'wp-admin/includes/file.php';
+			if ( file_exists( $file_api ) ) {
+				require_once $file_api;
+			}
+		}
+
+		return function_exists( 'wp_tempnam' ) ? wp_tempnam( 'jmi-probe.png' ) : false;
 	}
 
 	/**
