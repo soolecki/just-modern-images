@@ -20,7 +20,7 @@ or size records.
 
 The plugin owns:
 
-- companion files ending in `.webp` and `.avif`;
+- immutable companion files ending in `.jmi-{token}.webp` and `.jmi-{token}.avif`;
 - attachment meta under `_jmi_manifest`;
 - queue, capability, lock, and diagnostic options prefixed with `jmi_`;
 - HTML added around eligible attachment images.
@@ -51,15 +51,17 @@ These are initial values. They must be validated on photographic, illustrated,
 transparent, and text-heavy fixtures before the first stable release.
 
 Changing a profile invalidates the processing status, not the original files or
-the last verified companions. The background queue refreshes companions in
-place and the renderer keeps using the last known good generation until its
-replacement has passed validation.
+the last verified companions. The background queue creates immutable
+replacements and the renderer keeps using the last known good generation until
+its replacement has passed validation and been recorded in the manifest.
 
 ### Capability probe
 
 The probe first asks WordPress whether an eligible editor supports a MIME type,
-then performs a small real conversion. Results are cached against the editor,
-PHP version, and relevant library version.
+then performs a small real conversion. Results are cached separately for each
+server environment against its hostname, editor, PHP version, WordPress version,
+and relevant library version. This prevents one application server in a cluster
+from overwriting another server's result.
 
 WebP and AVIF have independent states:
 
@@ -68,8 +70,9 @@ WebP and AVIF have independent states:
 - `temporarily_disabled`
 - `unknown`
 
-AVIF alpha support is probed separately. Failure in one format never prevents
-the other format from being generated or served.
+Failure in one format never prevents the other format from being generated or
+served. Repeated encoder failures temporarily pause only that format on the
+server environment where they occurred.
 
 ### Source inventory
 
@@ -94,10 +97,13 @@ variant map keyed by source size and MIME type.
 
 Each variant includes its relative path, MIME type, dimensions, byte size,
 status, and generation timestamp. Expected non-file outcomes such as
-`unsupported`, `not_smaller`, and `transparent_alpha_unsafe` are retained for
+`editor_unsupported`, `memory_budget`, and `not_smaller` are retained for
 diagnostics and to prevent repeated work.
 
-The manifest is written only after files have been finalized.
+The manifest is written only after files have been validated and copied to an
+immutable path. Replaced paths are retained in the manifest for a seven-day
+grace period before cleanup, so page or CDN caches can continue to use older
+markup safely.
 
 ### Converter
 
@@ -108,14 +114,18 @@ For every source and supported target format:
 3. Acquire an attachment lock.
 4. Create the editor and set the selected quality.
 5. Save to a unique temporary path in the destination directory.
-6. Validate bytes, MIME type, dimensions, decoding, and alpha safety.
+6. Validate bytes, MIME type, dimensions, and decoding.
 7. Discard the file when it is not smaller than the exact source.
-8. Atomically replace the deterministic companion path.
-9. Update the manifest and emit a cache-integration action.
-10. Release memory and the lock in a `finally` path.
+8. Copy the file to a new content-addressed companion path and verify its byte
+   size and SHA-256 hash.
+9. Publish the new path through the attachment manifest.
+10. Retire the previous path for delayed cleanup and emit cache-integration
+    actions.
+11. Release memory and the lock in a `finally` path.
 
 A previous valid companion remains in use until its replacement has passed all
-validation.
+validation. A complete orphan left by an interrupted database write is
+validated and reused on the next attempt.
 
 ### Queue
 
@@ -176,8 +186,11 @@ High, and Ultra. Standard is the default.
 The same screen can show operational information without adding configuration:
 
 - WebP and AVIF availability;
+- a real on-demand format check for the current server;
+- the number of server environments observed by the site;
 - separate ready and reviewed progress;
 - ready, partial, waiting, stale, and failed attachment counts;
+- plain-language failure details with stable diagnostic codes;
 - latest queue activity;
 - a resumable library scan action.
 
@@ -203,7 +216,7 @@ confirmation for deletion.
 | Hardcoded image URL | Original; no full-page output rewriting |
 | Attachment deletion | Remove companions recorded in that attachment's manifest |
 | Plugin deactivation | Stop rendering and processing; originals work immediately |
-| Plugin uninstall | Remove settings and metadata; file cleanup requires a deliberate tool action |
+| Plugin uninstall | Remove plugin settings, metadata, and recorded companions |
 
 ## Release gates
 

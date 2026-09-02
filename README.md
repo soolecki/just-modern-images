@@ -17,8 +17,10 @@ The project is currently under active development and is not ready for productio
 The original prototype has been replaced with a fail-safe conversion pipeline.
 Version 0.11 adds observable Media Library state, explicit manual priority,
 request-based processing priority without visitor tracking, and a graphical
-progress screen. The project is still in pre-release development and needs broader integration
-testing before it is installed on production sites.
+progress screen. Version 0.11.1 adds actionable diagnostics, per-server capability
+profiles for clustered installations, and immutable output publishing designed
+for shared filesystems. The project is still in pre-release development and needs
+broader integration testing before a public WordPress.org release.
 
 ## Development
 

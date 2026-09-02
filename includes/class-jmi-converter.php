@@ -370,17 +370,27 @@ final class JMI_Converter {
 			return false;
 		}
 
-		$source_size = wp_filesize( $temporary_path );
-		$target_size = wp_filesize( $target_path );
-		$source_hash = hash_file( 'sha256', $temporary_path );
-		$target_hash = hash_file( 'sha256', $target_path );
+		$verification_warning = '';
+		$verification         = JMI_Error_Trap::run(
+			static function () use ( $temporary_path, $target_path ) {
+				return array(
+					'source_size' => wp_filesize( $temporary_path ),
+					'target_size' => wp_filesize( $target_path ),
+					'source_hash' => hash_file( 'sha256', $temporary_path ),
+					'target_hash' => hash_file( 'sha256', $target_path ),
+				);
+			},
+			$verification_warning
+		);
 
 		if (
-			$source_size < 1 ||
-			$source_size !== $target_size ||
-			! is_string( $source_hash ) ||
-			! is_string( $target_hash ) ||
-			! hash_equals( $source_hash, $target_hash )
+			'' !== $verification_warning ||
+			! is_array( $verification ) ||
+			$verification['source_size'] < 1 ||
+			$verification['source_size'] !== $verification['target_size'] ||
+			! is_string( $verification['source_hash'] ) ||
+			! is_string( $verification['target_hash'] ) ||
+			! hash_equals( $verification['source_hash'], $verification['target_hash'] )
 		) {
 			wp_delete_file( $target_path );
 			return false;

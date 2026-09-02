@@ -3,7 +3,7 @@ Tags: webp, avif, images, performance, optimization
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.11.0
+Stable tag: 0.11.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -29,11 +29,15 @@ The only preference is image quality: Economy, Standard, High, or Ultra. Server 
 
 The settings screen shows separate library-review and ready-image progress. Media Library rows and attachment details show whether an image is ready, queued, partially available, or needs attention. Administrators can move individual images or a bulk selection to the front of the queue.
 
+When an image needs attention, the settings screen and Media Library show a plain-language explanation together with a stable diagnostic code. A server check can also be run directly from the settings screen.
+
 = Designed to fail safely =
 
 Image encoding varies widely between hosting providers. Just Modern Images performs a real capability probe and validates every generated file before it becomes eligible for use. Empty, corrupt, oversized, incomplete, or undecodable output is discarded.
 
 WebP and AVIF are independent. If one encoder is missing or unstable, the other format continues to work. Repeated encoder failures temporarily pause only the affected format.
+
+On installations served by more than one application server, capability results and encoder health are kept separately for each server environment. Generated companions use immutable names, so a verified active file is never overwritten during a quality refresh. Replaced files remain available for seven days to protect cached HTML before they are cleaned up.
 
 = No frontend conversion =
 
@@ -73,7 +77,7 @@ Yes. Activation starts a cursor-based background scan that can resume after time
 
 = Why was a modern file not generated? =
 
-The source may be unavailable locally, the server may not support the format reliably, the image may exceed the safe memory budget, or the generated file may be no smaller than the original. These are safe skip conditions.
+The source may be unavailable locally, the server may not support the format reliably, the image may exceed the safe memory budget, or the generated file may be no smaller than the original. The settings screen and Media Library show the most relevant explanation and diagnostic code.
 
 = What happens when I change image quality? =
 
@@ -88,6 +92,15 @@ The plugin uses normal WordPress upload URLs and provides a filter for CDN integ
 Not in this release. The first release intentionally covers attachment images rendered through standard WordPress APIs without buffering or rewriting the entire page.
 
 == Changelog ==
+
+= 0.11.1 =
+
+* Added plain-language processing diagnostics and stable reason codes to Settings and Media Library views.
+* Added an on-demand real AVIF and WebP server check.
+* Kept capability and encoder-health results separate for every server environment in a cluster.
+* Switched generated companions to immutable names that do not replace an active file on shared storage.
+* Added recovery of complete files left by an interrupted run and explicit database-publication failure handling.
+* Retained replaced variants for seven days so cached pages can continue loading their previous URLs.
 
 = 0.11.0 =
 

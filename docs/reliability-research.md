@@ -61,7 +61,7 @@ References:
 - [Filename mismatch after regeneration](https://github.com/WordPress/performance/issues/1396)
 - [Revert to the original extension](https://wordpress.org/support/topic/revert-back-to-original-uploaded-image-extension-from-avif/)
 
-### Generated names must be deterministic
+### Generated names must be deterministic and immutable
 
 Repeated regeneration has produced chains such as `image-jpg-webp.webp` on
 real sites. Different original files can also share a basename.
@@ -69,11 +69,14 @@ real sites. Different original files can also share a basename.
 Requirements:
 
 - Only JPEG and PNG files owned by an attachment are accepted as sources.
-- A companion includes the original extension, for example
-  `photo.jpg.webp` and `photo.jpg.avif`.
+- A companion includes the original extension and a stable generation token,
+  for example `photo.jpg.jmi-a1b2c3d4.webp`.
 - A generated WebP or AVIF is never accepted as a source.
 - The source signature and generation profile decide whether a file is current.
-- A rebuild replaces the same companion instead of inventing another name.
+- Repeating the same generation produces the same path.
+- A changed source or quality profile produces a new path without overwriting a
+  file that cached HTML may still reference.
+- Replaced paths remain available for a bounded grace period before cleanup.
 
 References:
 
@@ -91,7 +94,8 @@ Requirements:
 - Write to a temporary file in the destination directory.
 - Validate non-zero size, MIME type, dimensions, and decodability.
 - Preserve alpha or skip that format for the affected source.
-- Atomically rename a validated temporary file into place.
+- Publish a validated temporary file under a new immutable path, verify the
+  copied bytes, and only then reference it from the manifest.
 - Keep serving the original when any validation step fails.
 
 References:
@@ -214,4 +218,3 @@ The following invariants apply to every release:
 6. A modern source is served only after its file has been validated.
 7. A modern source is never served when it is not smaller than its original.
 8. Plugin settings contain one product choice: the quality preset.
-

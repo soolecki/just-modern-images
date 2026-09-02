@@ -74,8 +74,25 @@ final class JMI_Plugin {
 		$renderer->register();
 		$settings->register();
 		$media_admin->register();
+		$this->maybe_upgrade( $capabilities );
 
 		add_action( 'delete_attachment', array( $this, 'delete_attachment_variants' ), 10, 1 );
+	}
+
+	/**
+	 * Start a fresh resumable scan after installing a new plugin version.
+	 *
+	 * @param JMI_Capabilities $capabilities Server capabilities.
+	 * @return void
+	 */
+	private function maybe_upgrade( $capabilities ) {
+		if ( JMI_VERSION === get_option( 'jmi_version', '' ) ) {
+			return;
+		}
+
+		$capabilities->invalidate();
+		$this->queue->start_scan( 'upgrade' );
+		update_option( 'jmi_version', JMI_VERSION, false );
 	}
 
 	/**
