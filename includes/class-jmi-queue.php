@@ -19,6 +19,8 @@ final class JMI_Queue {
 	const STATUS_OPTION = 'jmi_queue_status';
 	const LOCK_PREFIX   = 'jmi_attachment_lock_';
 	const LOCK_TTL      = 900;
+	const WORKER_LOCK   = 'jmi_scan_worker_lock';
+	const WORKER_TTL    = 300;
 
 	/**
 	 * Attachment converter.
@@ -47,6 +49,29 @@ final class JMI_Queue {
 	 * @var array<int, bool>
 	 */
 	private $demanded = array();
+
+	/**
+	 * Start of this request's Just Modern Images workload.
+	 *
+	 * Static state is shared by all cron events dispatched in one PHP request.
+	 *
+	 * @var float
+	 */
+	private static $request_worker_started_at = 0.0;
+
+	/**
+	 * Attachments attempted by all plugin workers in this PHP request.
+	 *
+	 * @var int
+	 */
+	private static $request_worker_attempts = 0;
+
+	/**
+	 * Total attachment processing time in this PHP request.
+	 *
+	 * @var float
+	 */
+	private static $request_worker_item_time = 0.0;
 
 	/**
 	 * Set up the queue.
@@ -178,43 +203,74 @@ final class JMI_Queue {
 	/**
 	 * Process one attachment while holding an expiring lock.
 	 *
-	 * @param mixed $attachment_id Attachment ID.
-	 * @return void
+	 * @param mixed $attachment_id   Attachment ID.
+	 * @param bool  $owns_worker_lock Whether the adaptive scanner already owns the shared worker lock.
+	 * @return bool Whether the attachment reached the converter.
 	 */
-	public function process_attachment( $attachment_id ) {
+	public function process_attachment( $attachment_id, $owns_worker_lock = false ) {
 		$attachment_id = absint( $attachment_id );
 		if ( ! $attachment_id ) {
-			return;
+			return false;
 		}
 
-		if ( ! $this->acquire_lock( $attachment_id ) ) {
-			wp_schedule_single_event( time() + 30, self::PROCESS_HOOK, array( $attachment_id ) );
-			return;
-		}
+		$acquired_worker_lock = false;
+		if ( ! $owns_worker_lock ) {
+			$this->start_request_budget();
+			$time_budget = $this->worker_time_budget( self::$request_worker_started_at );
+			$max_items   = min( 100, max( 1, (int) apply_filters( 'jmi_worker_max_items', 50 ) ) );
+			$threshold   = min( 0.95, max( 0.5, (float) apply_filters( 'jmi_worker_memory_threshold', 0.8 ) ) );
 
-		$generation_profile = $this->profiles->generation_profile();
-		$current_status     = $this->media_status->get( $attachment_id, $generation_profile );
-		$this->media_status->mark_processing( $attachment_id, $current_status['priority'], $generation_profile );
+			if ( $this->request_stop_reason( $time_budget, $max_items, $threshold ) ) {
+				$this->reschedule_attachment( $attachment_id, 5 );
+				return false;
+			}
+
+			if ( ! $this->acquire_worker_lock() ) {
+				$this->reschedule_attachment( $attachment_id, 30 );
+				return false;
+			}
+			$acquired_worker_lock = true;
+		}
 
 		try {
-			$summary = $this->converter->convert_attachment( $attachment_id );
-		} catch ( Throwable $error ) {
-			$summary = array(
-				'attachment_id' => $attachment_id,
-				'generated'     => 0,
-				'reused'        => 0,
-				'retained'      => 0,
-				'skipped'       => 0,
-				'failed'        => 1,
-				'last_reason'   => 'unexpected_worker_failure',
-				'state'         => 'failed',
-			);
-		} finally {
-			$this->release_lock( $attachment_id );
-		}
+			$item_started = microtime( true );
+			if ( ! $this->acquire_lock( $attachment_id ) ) {
+				$this->record_request_attempt( microtime( true ) - $item_started );
+				$this->reschedule_attachment( $attachment_id, 30 );
+				return false;
+			}
 
-		$this->media_status->record_result( $attachment_id, $generation_profile, $summary );
-		$this->record_counters( $summary );
+			$generation_profile = $this->profiles->generation_profile();
+			$current_status     = $this->media_status->get( $attachment_id, $generation_profile );
+			$this->media_status->mark_processing( $attachment_id, $current_status['priority'], $generation_profile );
+
+			try {
+				$summary = $this->converter->convert_attachment( $attachment_id );
+			} catch ( Throwable $error ) {
+				$summary = array(
+					'attachment_id' => $attachment_id,
+					'generated'     => 0,
+					'reused'        => 0,
+					'retained'      => 0,
+					'skipped'       => 0,
+					'failed'        => 1,
+					'last_reason'   => 'unexpected_worker_failure',
+					'state'         => 'failed',
+				);
+			} finally {
+				$this->release_lock( $attachment_id );
+			}
+
+			$this->media_status->record_result( $attachment_id, $generation_profile, $summary );
+			$this->record_counters( $summary );
+			$this->record_request_attempt( microtime( true ) - $item_started );
+
+			return true;
+		} finally {
+			if ( $acquired_worker_lock ) {
+				$this->release_worker_lock();
+			}
+		}
 	}
 
 	/**
@@ -228,19 +284,24 @@ final class JMI_Queue {
 		update_option(
 			self::STATUS_OPTION,
 			array(
-				'status'      => 'queued',
-				'reason'      => sanitize_key( $reason ),
-				'cursor'      => 0,
-				'total'       => $stats['total'],
-				'scheduled'   => 0,
-				'processed'   => 0,
-				'generated'   => 0,
-				'reused'      => 0,
-				'retained'    => 0,
-				'skipped'     => 0,
-				'failed'      => 0,
-				'last_reason' => '',
-				'last_update' => time(),
+				'status'               => 'queued',
+				'reason'               => sanitize_key( $reason ),
+				'cursor'               => 0,
+				'total'                => $stats['total'],
+				'scheduled'            => 0,
+				'processed'            => 0,
+				'generated'            => 0,
+				'reused'               => 0,
+				'retained'             => 0,
+				'skipped'              => 0,
+				'failed'               => 0,
+				'last_reason'          => '',
+				'last_update'          => time(),
+				'last_worker_at'       => 0,
+				'last_worker_items'    => 0,
+				'last_worker_attempts' => 0,
+				'last_worker_ms'       => 0,
+				'last_worker_stop'     => '',
 			),
 			false
 		);
@@ -251,50 +312,272 @@ final class JMI_Queue {
 	}
 
 	/**
-	 * Schedule a bounded page of existing image attachments.
+	 * Process existing attachments within adaptive time and memory budgets.
 	 *
 	 * @return void
 	 */
 	public function scan_library() {
 		global $wpdb;
 
-		$status = $this->status();
-		$cursor = isset( $status['cursor'] ) ? absint( $status['cursor'] ) : 0;
-		$limit  = (int) apply_filters( 'jmi_scan_batch_size', 20 );
-		$limit  = min( 100, max( 1, $limit ) );
-
-		$query = $wpdb->prepare(
-			"SELECT ID FROM {$wpdb->posts}
-			WHERE ID > %d
-			AND post_type = 'attachment'
-			AND post_mime_type IN ('image/jpeg', 'image/png')
-			ORDER BY ID ASC
-			LIMIT %d",
-			$cursor,
-			$limit
-		);
-		// A cursor avoids increasingly expensive offsets on large media libraries.
-		$attachment_ids = $wpdb->get_col( $query ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
-
-		if ( empty( $attachment_ids ) ) {
-			$status['status']      = 'complete';
-			$status['last_update'] = time();
-			update_option( self::STATUS_OPTION, $status, false );
+		if ( ! $this->acquire_worker_lock() ) {
+			$this->schedule_scan( 30 );
 			return;
 		}
 
-		foreach ( $attachment_ids as $index => $attachment_id ) {
-			if ( $this->schedule_attachment( $attachment_id, 2 + (int) $index, 'background' ) ) {
-				++$status['scheduled'];
+		$this->start_request_budget();
+		$started_at       = microtime( true );
+		$status           = $this->status();
+		$cursor           = isset( $status['cursor'] ) ? absint( $status['cursor'] ) : 0;
+		$page_size        = min( 100, max( 1, (int) apply_filters( 'jmi_scan_batch_size', 20 ) ) );
+		$max_items        = min( 100, max( 1, (int) apply_filters( 'jmi_worker_max_items', 50 ) ) );
+		$time_budget      = $this->worker_time_budget( $started_at );
+		$memory_threshold = min( 0.95, max( 0.5, (float) apply_filters( 'jmi_worker_memory_threshold', 0.8 ) ) );
+		$attempts         = 0;
+		$processed        = 0;
+		$stop_reason      = '';
+		$complete         = false;
+
+		try {
+			while ( ! $stop_reason ) {
+				$stop_reason = $this->request_stop_reason( $time_budget, $max_items, $memory_threshold );
+
+				if ( $stop_reason ) {
+					break;
+				}
+
+				$query = $wpdb->prepare(
+					"SELECT ID FROM {$wpdb->posts}
+					WHERE ID > %d
+					AND post_type = 'attachment'
+					AND post_mime_type IN ('image/jpeg', 'image/png')
+					ORDER BY ID ASC
+					LIMIT %d",
+					$cursor,
+					min( $page_size, $max_items - $attempts )
+				);
+				// A cursor avoids increasingly expensive offsets on large media libraries.
+				$attachment_ids = $wpdb->get_col( $query ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+
+				if ( empty( $attachment_ids ) ) {
+					$complete    = true;
+					$stop_reason = 'complete';
+					break;
+				}
+
+				foreach ( $attachment_ids as $attachment_id ) {
+					$stop_reason = $this->request_stop_reason( $time_budget, $max_items, $memory_threshold );
+
+					if ( $stop_reason ) {
+						break;
+					}
+
+					$attachment_id = absint( $attachment_id );
+					$event_time    = wp_next_scheduled( self::PROCESS_HOOK, array( $attachment_id ) );
+					if ( $event_time ) {
+						wp_unschedule_event( $event_time, self::PROCESS_HOOK, array( $attachment_id ) );
+					}
+
+					if ( $this->process_attachment( $attachment_id, true ) ) {
+						++$processed;
+					}
+					++$attempts;
+					$cursor = $attachment_id;
+					$this->record_scan_cursor( $cursor );
+				}
 			}
-			$status['cursor'] = absint( $attachment_id );
+		} catch ( Throwable $error ) {
+			$stop_reason           = 'unexpected_worker_failure';
+			$status                = $this->status();
+			$status['last_reason'] = 'unexpected_worker_failure';
+			update_option( self::STATUS_OPTION, $status, false );
+		} finally {
+			$this->record_worker_run(
+				$processed,
+				$attempts,
+				microtime( true ) - $started_at,
+				$stop_reason,
+				$complete
+			);
+			$this->release_worker_lock();
 		}
 
+		if ( ! $complete ) {
+			$this->schedule_scan( 5 );
+		}
+	}
+
+	/**
+	 * Return the safe amount of time available to this worker.
+	 *
+	 * @param float $started_at Worker start time.
+	 * @return float Seconds available.
+	 */
+	private function worker_time_budget( $started_at ) {
+		$configured = min( 45, max( 5, (int) apply_filters( 'jmi_worker_time_budget', 20 ) ) );
+		$php_limit  = (int) ini_get( 'max_execution_time' );
+
+		if ( $php_limit <= 0 ) {
+			return (float) $configured;
+		}
+
+		$request_started = isset( $_SERVER['REQUEST_TIME_FLOAT'] )
+			? (float) $_SERVER['REQUEST_TIME_FLOAT']
+			: $started_at;
+		$available       = ( $request_started + $php_limit - 5 ) - $started_at;
+
+		return max( 0.0, min( (float) $configured, $available ) );
+	}
+
+	/**
+	 * Initialize the budget shared by all plugin jobs in this PHP request.
+	 *
+	 * @return void
+	 */
+	private function start_request_budget() {
+		if ( self::$request_worker_started_at <= 0 ) {
+			self::$request_worker_started_at = microtime( true );
+		}
+	}
+
+	/**
+	 * Return the current request-wide reason to yield control.
+	 *
+	 * @param float $time_budget      Safe worker time budget.
+	 * @param int   $max_items        Per-request item ceiling.
+	 * @param float $memory_threshold Fraction of memory that may be occupied.
+	 * @return string Empty when work may continue, otherwise a stable stop code.
+	 */
+	private function request_stop_reason( $time_budget, $max_items, $memory_threshold ) {
+		$this->start_request_budget();
+		$average_duration = self::$request_worker_attempts
+			? self::$request_worker_item_time / self::$request_worker_attempts
+			: 0.0;
+
+		return $this->worker_stop_reason(
+			self::$request_worker_attempts,
+			microtime( true ) - self::$request_worker_started_at,
+			$average_duration,
+			$time_budget,
+			$max_items,
+			memory_get_usage( true ),
+			$this->memory_limit_bytes(),
+			$memory_threshold
+		);
+	}
+
+	/**
+	 * Add one completed attempt to the request-wide workload.
+	 *
+	 * @param float $duration Attachment processing time in seconds.
+	 * @return void
+	 */
+	private function record_request_attempt( $duration ) {
+		++self::$request_worker_attempts;
+		self::$request_worker_item_time += max( 0.0, (float) $duration );
+	}
+
+	/**
+	 * Decide whether another image can start safely.
+	 *
+	 * @param int   $attempts         Images attempted so far.
+	 * @param float $elapsed          Worker runtime in seconds.
+	 * @param float $average_duration Average image time in seconds.
+	 * @param float $time_budget      Safe worker time budget.
+	 * @param int   $max_items        Per-run item ceiling.
+	 * @param int   $memory_usage     Current allocated memory.
+	 * @param int   $memory_limit     PHP memory limit in bytes, or zero when unlimited.
+	 * @param float $memory_threshold Fraction of memory that may be occupied.
+	 * @return string Empty when work may continue, otherwise a stable stop code.
+	 */
+	private function worker_stop_reason( $attempts, $elapsed, $average_duration, $time_budget, $max_items, $memory_usage, $memory_limit, $memory_threshold ) {
+		if ( $attempts >= $max_items ) {
+			return 'item_limit';
+		}
+
+		if ( $memory_limit > 0 && $memory_usage >= (int) floor( $memory_limit * $memory_threshold ) ) {
+			return 'memory_pressure';
+		}
+
+		$next_estimate = $attempts ? max( 0.5, $average_duration * 1.5 ) : 0.0;
+		if ( $elapsed + $next_estimate + 2.0 >= $time_budget ) {
+			return 'time_budget';
+		}
+
+		return '';
+	}
+
+	/**
+	 * Return the configured PHP memory limit in bytes.
+	 *
+	 * @return int Zero means unlimited or unknown.
+	 */
+	private function memory_limit_bytes() {
+		$limit = wp_convert_hr_to_bytes( ini_get( 'memory_limit' ) );
+
+		return $limit > 0 ? (int) $limit : 0;
+	}
+
+	/**
+	 * Persist the resumable cursor after each attempted attachment.
+	 *
+	 * @param int $cursor Last visited attachment ID.
+	 * @return void
+	 */
+	private function record_scan_cursor( $cursor ) {
+		$status                = $this->status();
+		$status['cursor']      = absint( $cursor );
 		$status['status']      = 'running';
+		$status['scheduled']   = (int) $status['scheduled'] + 1;
 		$status['last_update'] = time();
 		update_option( self::STATUS_OPTION, $status, false );
+	}
 
-		wp_schedule_single_event( time() + 30, self::SCAN_HOOK );
+	/**
+	 * Persist observability for the most recent adaptive worker run.
+	 *
+	 * @param int    $processed   Attachments that reached the converter.
+	 * @param int    $attempts    Attachments claimed by this run.
+	 * @param float  $duration    Runtime in seconds.
+	 * @param string $stop_reason Stable stop code.
+	 * @param bool   $complete    Whether the library cursor reached the end.
+	 * @return void
+	 */
+	private function record_worker_run( $processed, $attempts, $duration, $stop_reason, $complete ) {
+		$status                         = $this->status();
+		$status['status']               = $complete ? 'complete' : 'running';
+		$status['last_update']          = time();
+		$status['last_worker_at']       = time();
+		$status['last_worker_items']    = max( 0, (int) $processed );
+		$status['last_worker_attempts'] = max( 0, (int) $attempts );
+		$status['last_worker_ms']       = max( 0, (int) round( $duration * 1000 ) );
+		$status['last_worker_stop']     = sanitize_key( $stop_reason );
+		update_option( self::STATUS_OPTION, $status, false );
+	}
+
+	/**
+	 * Schedule the next scan without creating duplicate events.
+	 *
+	 * @param int $delay Delay in seconds.
+	 * @return void
+	 */
+	private function schedule_scan( $delay ) {
+		if ( ! wp_next_scheduled( self::SCAN_HOOK ) ) {
+			wp_schedule_single_event( time() + max( 1, (int) $delay ), self::SCAN_HOOK );
+		}
+	}
+
+	/**
+	 * Requeue an attachment without discarding its current priority lane.
+	 *
+	 * @param int $attachment_id Attachment ID.
+	 * @param int $delay         Delay in seconds.
+	 * @return void
+	 */
+	private function reschedule_attachment( $attachment_id, $delay ) {
+		$status   = $this->media_status->get( $attachment_id, $this->profiles->generation_profile() );
+		$priority = $this->normalize_priority( $status['priority'] );
+
+		$this->schedule_attachment( $attachment_id, $delay, $priority, true );
 	}
 
 	/**
@@ -305,19 +588,24 @@ final class JMI_Queue {
 	public function status() {
 		$status = get_option( self::STATUS_OPTION, array() );
 		$base   = array(
-			'status'      => 'idle',
-			'reason'      => '',
-			'cursor'      => 0,
-			'total'       => 0,
-			'scheduled'   => 0,
-			'processed'   => 0,
-			'generated'   => 0,
-			'reused'      => 0,
-			'retained'    => 0,
-			'skipped'     => 0,
-			'failed'      => 0,
-			'last_reason' => '',
-			'last_update' => 0,
+			'status'               => 'idle',
+			'reason'               => '',
+			'cursor'               => 0,
+			'total'                => 0,
+			'scheduled'            => 0,
+			'processed'            => 0,
+			'generated'            => 0,
+			'reused'               => 0,
+			'retained'             => 0,
+			'skipped'              => 0,
+			'failed'               => 0,
+			'last_reason'          => '',
+			'last_update'          => 0,
+			'last_worker_at'       => 0,
+			'last_worker_items'    => 0,
+			'last_worker_attempts' => 0,
+			'last_worker_ms'       => 0,
+			'last_worker_stop'     => '',
 		);
 
 		return is_array( $status ) ? array_merge( $base, $status ) : $base;
@@ -331,6 +619,7 @@ final class JMI_Queue {
 	public static function unschedule() {
 		wp_clear_scheduled_hook( self::PROCESS_HOOK );
 		wp_clear_scheduled_hook( self::SCAN_HOOK );
+		delete_option( self::WORKER_LOCK );
 	}
 
 	/**
@@ -374,6 +663,37 @@ final class JMI_Queue {
 		delete_option( $key );
 
 		return add_option( $key, $now, '', false );
+	}
+
+	/**
+	 * Acquire the shared adaptive-worker lock with stale recovery.
+	 *
+	 * @return bool
+	 */
+	private function acquire_worker_lock() {
+		$now = time();
+
+		if ( add_option( self::WORKER_LOCK, $now, '', false ) ) {
+			return true;
+		}
+
+		$locked_at = (int) get_option( self::WORKER_LOCK, 0 );
+		if ( $locked_at && $locked_at > $now - self::WORKER_TTL ) {
+			return false;
+		}
+
+		delete_option( self::WORKER_LOCK );
+
+		return add_option( self::WORKER_LOCK, $now, '', false );
+	}
+
+	/**
+	 * Release the shared adaptive-worker lock.
+	 *
+	 * @return void
+	 */
+	private function release_worker_lock() {
+		delete_option( self::WORKER_LOCK );
 	}
 
 	/**

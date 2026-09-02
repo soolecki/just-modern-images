@@ -48,4 +48,4 @@ function jmi_plugin() {
 
 register_activation_hook( __FILE__, array( 'JMI_Plugin', 'activate' ) );
 register_deactivation_hook( __FILE__, array( 'JMI_Plugin', 'deactivate' ) );
-add_action( 'plugins_loaded', 'jmi_plugin' );
+add_action( 'init', 'jmi_plugin', 5 );

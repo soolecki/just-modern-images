@@ -23,30 +23,44 @@ final class JMI_Quality_Profiles {
 	 * @return array<string, array<string, int|string>>
 	 */
 	public function all() {
+		$profiles = $this->quality_values();
+
+		$profiles['economy']['label']        = __( 'Economy', 'just-modern-images' );
+		$profiles['economy']['description']  = __( 'Prioritizes the smallest practical files.', 'just-modern-images' );
+		$profiles['standard']['label']       = __( 'Standard', 'just-modern-images' );
+		$profiles['standard']['description'] = __( 'A balanced choice for most websites.', 'just-modern-images' );
+		$profiles['high']['label']           = __( 'High', 'just-modern-images' );
+		$profiles['high']['description']     = __( 'Keeps more detail for image-led websites.', 'just-modern-images' );
+		$profiles['ultra']['label']          = __( 'Ultra', 'just-modern-images' );
+		$profiles['ultra']['description']    = __( 'Maximum fidelity with larger files.', 'just-modern-images' );
+
+		return $profiles;
+	}
+
+	/**
+	 * Return profile values without triggering translation loading.
+	 *
+	 * Queue setup may need these values before the admin interface is rendered.
+	 *
+	 * @return array<string, array<string, int>>
+	 */
+	private function quality_values() {
 		return array(
 			'economy'  => array(
-				'label'       => __( 'Economy', 'just-modern-images' ),
-				'description' => __( 'Prioritizes the smallest practical files.', 'just-modern-images' ),
-				'webp'        => 68,
-				'avif'        => 38,
+				'webp' => 68,
+				'avif' => 38,
 			),
 			'standard' => array(
-				'label'       => __( 'Standard', 'just-modern-images' ),
-				'description' => __( 'A balanced choice for most websites.', 'just-modern-images' ),
-				'webp'        => 78,
-				'avif'        => 48,
+				'webp' => 78,
+				'avif' => 48,
 			),
 			'high'     => array(
-				'label'       => __( 'High', 'just-modern-images' ),
-				'description' => __( 'Keeps more detail for image-led websites.', 'just-modern-images' ),
-				'webp'        => 86,
-				'avif'        => 58,
+				'webp' => 86,
+				'avif' => 58,
 			),
 			'ultra'    => array(
-				'label'       => __( 'Ultra', 'just-modern-images' ),
-				'description' => __( 'Maximum fidelity with larger files.', 'just-modern-images' ),
-				'webp'        => 94,
-				'avif'        => 72,
+				'webp' => 94,
+				'avif' => 72,
 			),
 		);
 	}
@@ -78,8 +92,9 @@ final class JMI_Quality_Profiles {
 	 * @return int
 	 */
 	public function quality_for( $mime_type ) {
-		$profile = $this->selected();
-		$key     = 'image/avif' === $mime_type ? 'avif' : 'webp';
+		$profiles = $this->quality_values();
+		$profile  = $profiles[ $this->selected_key() ];
+		$key      = 'image/avif' === $mime_type ? 'avif' : 'webp';
 
 		return (int) $profile[ $key ];
 	}
@@ -92,7 +107,7 @@ final class JMI_Quality_Profiles {
 	 */
 	public function sanitize( $value ) {
 		$value    = is_string( $value ) ? sanitize_key( $value ) : '';
-		$profiles = $this->all();
+		$profiles = $this->quality_values();
 
 		return isset( $profiles[ $value ] ) ? $value : self::DEFAULT_PROFILE;
 	}
@@ -103,7 +118,8 @@ final class JMI_Quality_Profiles {
 	 * @return string
 	 */
 	public function generation_profile() {
-		$profile = $this->selected();
+		$profiles = $this->quality_values();
+		$profile  = $profiles[ $this->selected_key() ];
 
 		return sprintf(
 			'v1:%s:webp-%d:avif-%d',

@@ -5,7 +5,8 @@ use PHPUnit\Framework\TestCase;
 final class QualityProfilesTest extends TestCase {
 
 	protected function setUp(): void {
-		$GLOBALS['jmi_test_options'] = array();
+		$GLOBALS['jmi_test_options']           = array();
+		$GLOBALS['jmi_test_translation_calls'] = array();
 	}
 
 	public function test_standard_is_the_default_profile(): void {
@@ -33,5 +34,17 @@ final class QualityProfilesTest extends TestCase {
 		$this->assertStringContainsString( 'webp-94', $profiles->generation_profile() );
 		$this->assertStringContainsString( 'avif-72', $profiles->generation_profile() );
 	}
-}
 
+	public function test_runtime_profile_values_do_not_trigger_translation_loading(): void {
+		$profiles = new JMI_Quality_Profiles();
+
+		$profiles->selected_key();
+		$profiles->quality_for( 'image/webp' );
+		$profiles->generation_profile();
+
+		$this->assertSame( array(), $GLOBALS['jmi_test_translation_calls'] );
+
+		$profiles->all();
+		$this->assertNotEmpty( $GLOBALS['jmi_test_translation_calls'] );
+	}
+}

@@ -236,6 +236,8 @@ final class JMI_Settings {
 						<div><dt><?php esc_html_e( 'Library scan', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->queue_status_label( $status['status'] ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Attachments processed', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( number_format_i18n( (int) $status['processed'] ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Files generated', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( number_format_i18n( (int) $status['generated'] ) ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Last cron workload', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->worker_run_label( $status ) ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Worker paused because', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->worker_stop_label( $status['last_worker_stop'] ?? '' ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Last activity', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->last_activity_label( $status['last_update'] ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Last result', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $last_reason ? $this->diagnostic_label( $last_reason ) : __( 'No issues recorded', 'just-modern-images' ) ); ?>
 						<?php
@@ -387,7 +389,7 @@ final class JMI_Settings {
 	private function server_summary() {
 		if ( method_exists( $this->capabilities, 'diagnostic_summary' ) ) {
 			$summary                   = $this->capabilities->diagnostic_summary();
-			$summary['rolling_update'] = version_compare( JMI_VERSION, '0.11.2', '<' );
+			$summary['rolling_update'] = version_compare( JMI_VERSION, '0.11.3', '<' );
 			return $summary;
 		}
 
@@ -452,5 +454,46 @@ final class JMI_Settings {
 			__( '%s ago', 'just-modern-images' ),
 			human_time_diff( $timestamp, time() )
 		);
+	}
+
+	/**
+	 * Summarize the latest adaptive cron workload.
+	 *
+	 * @param array<string, mixed> $status Queue status.
+	 * @return string
+	 */
+	private function worker_run_label( $status ) {
+		if ( empty( $status['last_worker_at'] ) ) {
+			return __( 'No worker run yet', 'just-modern-images' );
+		}
+
+		$items   = max( 0, (int) ( $status['last_worker_items'] ?? 0 ) );
+		$seconds = max( 0, (int) ( $status['last_worker_ms'] ?? 0 ) ) / 1000;
+
+		return sprintf(
+			/* translators: 1: number of processed images, 2: worker runtime in seconds. */
+			_n( '%1$s image in %2$s seconds', '%1$s images in %2$s seconds', $items, 'just-modern-images' ),
+			number_format_i18n( $items ),
+			number_format_i18n( $seconds, 1 )
+		);
+	}
+
+	/**
+	 * Translate the reason an adaptive worker yielded control.
+	 *
+	 * @param mixed $reason Stable worker stop code.
+	 * @return string
+	 */
+	private function worker_stop_label( $reason ) {
+		$labels = array(
+			'complete'                  => __( 'The library scan is complete', 'just-modern-images' ),
+			'time_budget'               => __( 'The safe time budget was reached', 'just-modern-images' ),
+			'memory_pressure'           => __( 'The memory reserve was reached', 'just-modern-images' ),
+			'item_limit'                => __( 'The per-run image limit was reached', 'just-modern-images' ),
+			'unexpected_worker_failure' => __( 'The worker stopped after an unexpected error', 'just-modern-images' ),
+		);
+		$reason = sanitize_key( $reason );
+
+		return $labels[ $reason ] ?? __( 'Waiting for a worker run', 'just-modern-images' );
 	}
 }

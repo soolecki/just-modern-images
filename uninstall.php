@@ -49,6 +49,7 @@ function jmi_uninstall_site() {
 			'jmi_format_health',
 			'jmi_quality_profile',
 			'jmi_queue_status',
+			'jmi_scan_worker_lock',
 			'jmi_version',
 		) as $option_name
 	) {
