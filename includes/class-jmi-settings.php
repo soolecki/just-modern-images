@@ -133,6 +133,20 @@ final class JMI_Settings {
 		$ready_pct           = $stats['total'] ? (int) round( ( $stats['ready'] / $stats['total'] ) * 100 ) : 0;
 		$reviewed_pct        = $stats['total'] ? (int) round( ( $stats['reviewed'] / $stats['total'] ) * 100 ) : 0;
 		$last_reason         = sanitize_key( $status['last_reason'] ?? '' );
+		$worker_diagnostics  = method_exists( $this->queue, 'diagnostics' )
+			? $this->queue->diagnostics()
+			: array(
+				'next_event' => 0,
+				'lock_state' => 'unknown',
+				'lock_age'   => 0,
+			);
+		$scan_started_at     = ! empty( $status['scan_started_at'] )
+			? (int) $status['scan_started_at']
+			: (int) $status['last_update'];
+		$worker_stalled      = in_array( $status['status'], array( 'queued', 'running' ), true ) &&
+			empty( $status['last_worker_at'] ) &&
+			$scan_started_at > 0 &&
+			$scan_started_at < time() - 5 * MINUTE_IN_SECONDS;
 		$attention_media_url = add_query_arg( 'jmi-status', 'attention', admin_url( 'upload.php?mode=list' ) );
 		?>
 		<div class="wrap jmi-admin">
@@ -154,6 +168,12 @@ final class JMI_Settings {
 			<?php endif; ?>
 			<?php if ( $server['rolling_update'] ) : ?>
 				<div class="notice notice-warning"><p><?php esc_html_e( 'This server is still using an older cached plugin component. Processing remains safe and will resume after the server reloads the current version.', 'just-modern-images' ); ?></p></div>
+			<?php endif; ?>
+			<?php if ( $worker_stalled ) : ?>
+				<div class="notice notice-warning"><p><?php esc_html_e( 'The image worker has not reported a run. A recovery event has been queued automatically. If this message remains after the next cron calls, refresh PHP OPcache on the servers handling cron.', 'just-modern-images' ); ?></p></div>
+			<?php endif; ?>
+			<?php if ( 'failed' === ( $status['last_schedule_result'] ?? '' ) ) : ?>
+				<div class="notice notice-error"><p><?php esc_html_e( 'WordPress rejected the background worker event. The plugin will retry scheduling it on the next request.', 'just-modern-images' ); ?></p></div>
 			<?php endif; ?>
 
 			<?php if ( $stats['failed'] ) : ?>
@@ -238,6 +258,9 @@ final class JMI_Settings {
 						<div><dt><?php esc_html_e( 'Files generated', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( number_format_i18n( (int) $status['generated'] ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Last cron workload', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->worker_run_label( $status ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Worker paused because', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->worker_stop_label( $status['last_worker_stop'] ?? '' ) ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Next worker event', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->worker_event_label( $worker_diagnostics, $status['status'] ) ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Worker lock', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->worker_lock_label( $worker_diagnostics ) ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Worker code', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->worker_version_label( $status['last_worker_version'] ?? '' ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Last activity', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->last_activity_label( $status['last_update'] ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Last result', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $last_reason ? $this->diagnostic_label( $last_reason ) : __( 'No issues recorded', 'just-modern-images' ) ); ?>
 						<?php
@@ -495,5 +518,72 @@ final class JMI_Settings {
 		$reason = sanitize_key( $reason );
 
 		return $labels[ $reason ] ?? __( 'Waiting for a worker run', 'just-modern-images' );
+	}
+
+	/**
+	 * Describe when WordPress will next dispatch the scanner.
+	 *
+	 * @param array<string, mixed> $diagnostics Queue diagnostics.
+	 * @param mixed                $scan_status Current scan status.
+	 * @return string
+	 */
+	private function worker_event_label( $diagnostics, $scan_status ) {
+		if ( 'complete' === sanitize_key( $scan_status ) ) {
+			return __( 'No more library work is queued', 'just-modern-images' );
+		}
+
+		$next_event = (int) ( $diagnostics['next_event'] ?? 0 );
+		if ( ! $next_event ) {
+			return __( 'No event is currently scheduled', 'just-modern-images' );
+		}
+
+		if ( $next_event <= time() ) {
+			return __( 'Ready for the next cron call', 'just-modern-images' );
+		}
+
+		return sprintf(
+			/* translators: %s: human-readable time until the next event. */
+			__( 'In %s', 'just-modern-images' ),
+			human_time_diff( time(), $next_event )
+		);
+	}
+
+	/**
+	 * Describe whether another request currently owns the worker.
+	 *
+	 * @param array<string, mixed> $diagnostics Queue diagnostics.
+	 * @return string
+	 */
+	private function worker_lock_label( $diagnostics ) {
+		$state = sanitize_key( $diagnostics['lock_state'] ?? 'unknown' );
+		if ( 'held' === $state ) {
+			return sprintf(
+				/* translators: %s: worker lock age in seconds. */
+				__( 'Another request is processing images (%s seconds)', 'just-modern-images' ),
+				number_format_i18n( (int) ( $diagnostics['lock_age'] ?? 0 ) )
+			);
+		}
+
+		if ( 'stale' === $state ) {
+			return __( 'An abandoned lock was detected', 'just-modern-images' );
+		}
+
+		if ( 'free' === $state ) {
+			return __( 'Available', 'just-modern-images' );
+		}
+
+		return __( 'Waiting for the current plugin code', 'just-modern-images' );
+	}
+
+	/**
+	 * Show the code revision that most recently completed a worker run.
+	 *
+	 * @param mixed $version Worker version.
+	 * @return string
+	 */
+	private function worker_version_label( $version ) {
+		$version = is_string( $version ) ? trim( $version ) : '';
+
+		return $version ? 'v' . $version : __( 'Not observed yet', 'just-modern-images' );
 	}
 }

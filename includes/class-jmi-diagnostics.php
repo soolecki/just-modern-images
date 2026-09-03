@@ -45,6 +45,7 @@ final class JMI_Diagnostics {
 			'no_local_sources'           => __( 'No local JPEG or PNG files were found for this media item.', 'just-modern-images' ),
 			'not_an_image_attachment'    => __( 'This media item is not a supported image.', 'just-modern-images' ),
 			'unexpected_worker_failure'  => __( 'The background worker stopped unexpectedly.', 'just-modern-images' ),
+			'schedule_failed'            => __( 'WordPress rejected the background worker event.', 'just-modern-images' ),
 			'quality_changed'            => __( 'This image is waiting to be refreshed at the new quality.', 'just-modern-images' ),
 			'generated'                  => __( 'The modern file was generated and validated.', 'just-modern-images' ),
 			'recovered_existing'         => __( 'A complete file from an interrupted run was recovered.', 'just-modern-images' ),

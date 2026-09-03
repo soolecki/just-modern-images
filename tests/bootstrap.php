@@ -9,12 +9,12 @@ define( 'DAY_IN_SECONDS', 86400 );
 define( 'MB_IN_BYTES', 1048576 );
 define( 'JMI_VERSION', 'test' );
 
-$GLOBALS['jmi_test_options']   = array();
-$GLOBALS['jmi_test_manifests'] = array();
-$GLOBALS['jmi_test_post_meta'] = array();
-$GLOBALS['jmi_test_mime_types'] = array();
-$GLOBALS['jmi_test_scheduled'] = array();
-$GLOBALS['jmi_test_filters'] = array();
+$GLOBALS['jmi_test_options']           = array();
+$GLOBALS['jmi_test_manifests']         = array();
+$GLOBALS['jmi_test_post_meta']         = array();
+$GLOBALS['jmi_test_mime_types']        = array();
+$GLOBALS['jmi_test_scheduled']         = array();
+$GLOBALS['jmi_test_filters']           = array();
 $GLOBALS['jmi_test_translation_calls'] = array();
 
 function __( $text, $domain = 'default' ) {
@@ -187,6 +187,10 @@ function wp_convert_hr_to_bytes( $value ) {
 	return $number;
 }
 
+function is_wp_error() {
+	return false;
+}
+
 function is_admin() {
 	return false;
 }
@@ -299,3 +303,4 @@ require_once dirname( __DIR__ ) . '/includes/class-jmi-converter.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-queue.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-renderer.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-settings.php';
+require_once dirname( __DIR__ ) . '/includes/class-jmi-plugin.php';

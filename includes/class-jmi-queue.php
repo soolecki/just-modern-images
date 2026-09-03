@@ -14,13 +14,14 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class JMI_Queue {
 
-	const PROCESS_HOOK  = 'jmi_process_attachment';
-	const SCAN_HOOK     = 'jmi_scan_library';
-	const STATUS_OPTION = 'jmi_queue_status';
-	const LOCK_PREFIX   = 'jmi_attachment_lock_';
-	const LOCK_TTL      = 900;
-	const WORKER_LOCK   = 'jmi_scan_worker_lock';
-	const WORKER_TTL    = 300;
+	const PROCESS_HOOK   = 'jmi_process_attachment';
+	const SCAN_HOOK      = 'jmi_scan_library';
+	const STATUS_OPTION  = 'jmi_queue_status';
+	const LOCK_PREFIX    = 'jmi_attachment_lock_';
+	const LOCK_TTL       = 900;
+	const WORKER_LOCK    = 'jmi_scan_worker_lock';
+	const WORKER_TTL     = 300;
+	const SCHEDULE_GRACE = 300;
 
 	/**
 	 * Attachment converter.
@@ -280,35 +281,87 @@ final class JMI_Queue {
 	 * @return void
 	 */
 	public function start_scan( $reason = 'manual' ) {
-		$stats = $this->media_status->library_stats( $this->profiles->generation_profile() );
+		$generation_profile = $this->profiles->generation_profile();
+		$current            = $this->status();
+
+		if (
+			'upgrade' === sanitize_key( $reason ) &&
+			in_array( $current['status'], array( 'queued', 'running' ), true ) &&
+			$generation_profile === $current['generation_profile']
+		) {
+			$this->ensure_scan_scheduled();
+			return;
+		}
+
+		$stats = $this->media_status->library_stats( $generation_profile );
 		update_option(
 			self::STATUS_OPTION,
 			array(
-				'status'               => 'queued',
-				'reason'               => sanitize_key( $reason ),
-				'cursor'               => 0,
-				'total'                => $stats['total'],
-				'scheduled'            => 0,
-				'processed'            => 0,
-				'generated'            => 0,
-				'reused'               => 0,
-				'retained'             => 0,
-				'skipped'              => 0,
-				'failed'               => 0,
-				'last_reason'          => '',
-				'last_update'          => time(),
-				'last_worker_at'       => 0,
-				'last_worker_items'    => 0,
-				'last_worker_attempts' => 0,
-				'last_worker_ms'       => 0,
-				'last_worker_stop'     => '',
+				'status'                  => 'queued',
+				'reason'                  => sanitize_key( $reason ),
+				'cursor'                  => 0,
+				'total'                   => $stats['total'],
+				'scheduled'               => 0,
+				'processed'               => 0,
+				'generated'               => 0,
+				'reused'                  => 0,
+				'retained'                => 0,
+				'skipped'                 => 0,
+				'failed'                  => 0,
+				'last_reason'             => '',
+				'last_update'             => time(),
+				'generation_profile'      => $generation_profile,
+				'scan_started_at'         => time(),
+				'last_worker_at'          => (int) $current['last_worker_at'],
+				'last_worker_items'       => (int) $current['last_worker_items'],
+				'last_worker_attempts'    => (int) $current['last_worker_attempts'],
+				'last_worker_ms'          => (int) $current['last_worker_ms'],
+				'last_worker_stop'        => (string) $current['last_worker_stop'],
+				'last_worker_version'     => (string) $current['last_worker_version'],
+				'last_schedule_at'        => (int) $current['last_schedule_at'],
+				'last_schedule_result'    => (string) $current['last_schedule_result'],
+				'last_lock_contention_at' => (int) $current['last_lock_contention_at'],
+				'last_lock_recovery_at'   => (int) $current['last_lock_recovery_at'],
 			),
 			false
 		);
 
-		if ( ! wp_next_scheduled( self::SCAN_HOOK ) ) {
-			wp_schedule_single_event( time() + 3, self::SCAN_HOOK );
+		$this->schedule_scan( 3 );
+	}
+
+	/**
+	 * Restore a missing scan event and clear an abandoned worker lock.
+	 *
+	 * Single cron events are removed before their callback runs. A fatal error
+	 * or process termination must therefore not stop the queue permanently.
+	 *
+	 * @return void
+	 */
+	public function ensure_scan_scheduled() {
+		$status = $this->status();
+		if ( ! in_array( $status['status'], array( 'queued', 'running' ), true ) ) {
+			return;
 		}
+
+		$now       = time();
+		$locked_at = (int) get_option( self::WORKER_LOCK, 0 );
+		if ( $locked_at && ( $locked_at <= $now - self::WORKER_TTL || $locked_at > $now + 60 ) ) {
+			delete_option( self::WORKER_LOCK );
+			$status['last_lock_recovery_at'] = $now;
+			$status['last_update']           = $now;
+			update_option( self::STATUS_OPTION, $status, false );
+		}
+
+		$next_event = wp_next_scheduled( self::SCAN_HOOK );
+		if ( $next_event && (int) $next_event >= $now - self::SCHEDULE_GRACE ) {
+			return;
+		}
+
+		if ( $next_event ) {
+			wp_unschedule_event( $next_event, self::SCAN_HOOK );
+		}
+
+		$this->schedule_scan( 1 );
 	}
 
 	/**
@@ -320,6 +373,10 @@ final class JMI_Queue {
 		global $wpdb;
 
 		if ( ! $this->acquire_worker_lock() ) {
+			$status                            = $this->status();
+			$status['last_lock_contention_at'] = time();
+			$status['last_update']             = time();
+			update_option( self::STATUS_OPTION, $status, false );
 			$this->schedule_scan( 30 );
 			return;
 		}
@@ -551,6 +608,7 @@ final class JMI_Queue {
 		$status['last_worker_attempts'] = max( 0, (int) $attempts );
 		$status['last_worker_ms']       = max( 0, (int) round( $duration * 1000 ) );
 		$status['last_worker_stop']     = sanitize_key( $stop_reason );
+		$status['last_worker_version']  = defined( 'JMI_VERSION' ) ? (string) JMI_VERSION : '';
 		update_option( self::STATUS_OPTION, $status, false );
 	}
 
@@ -562,8 +620,39 @@ final class JMI_Queue {
 	 */
 	private function schedule_scan( $delay ) {
 		if ( ! wp_next_scheduled( self::SCAN_HOOK ) ) {
-			wp_schedule_single_event( time() + max( 1, (int) $delay ), self::SCAN_HOOK );
+			$scheduled = wp_schedule_single_event( time() + max( 1, (int) $delay ), self::SCAN_HOOK, array(), true );
+			$succeeded = ! is_wp_error( $scheduled ) && false !== $scheduled;
+			$status    = $this->status();
+
+			$status['last_schedule_at']     = time();
+			$status['last_schedule_result'] = $succeeded ? 'scheduled' : 'failed';
+			if ( ! $succeeded ) {
+				$status['last_reason'] = 'schedule_failed';
+			}
+			update_option( self::STATUS_OPTION, $status, false );
 		}
+	}
+
+	/**
+	 * Return current scheduler and worker-lock state for the settings screen.
+	 *
+	 * @return array<string, int|string>
+	 */
+	public function diagnostics() {
+		$now        = time();
+		$next_event = wp_next_scheduled( self::SCAN_HOOK );
+		$locked_at  = (int) get_option( self::WORKER_LOCK, 0 );
+		$lock_state = 'free';
+
+		if ( $locked_at ) {
+			$lock_state = ( $locked_at <= $now - self::WORKER_TTL || $locked_at > $now + 60 ) ? 'stale' : 'held';
+		}
+
+		return array(
+			'next_event' => $next_event ? (int) $next_event : 0,
+			'lock_state' => $lock_state,
+			'lock_age'   => $locked_at ? max( 0, $now - $locked_at ) : 0,
+		);
 	}
 
 	/**
@@ -588,24 +677,31 @@ final class JMI_Queue {
 	public function status() {
 		$status = get_option( self::STATUS_OPTION, array() );
 		$base   = array(
-			'status'               => 'idle',
-			'reason'               => '',
-			'cursor'               => 0,
-			'total'                => 0,
-			'scheduled'            => 0,
-			'processed'            => 0,
-			'generated'            => 0,
-			'reused'               => 0,
-			'retained'             => 0,
-			'skipped'              => 0,
-			'failed'               => 0,
-			'last_reason'          => '',
-			'last_update'          => 0,
-			'last_worker_at'       => 0,
-			'last_worker_items'    => 0,
-			'last_worker_attempts' => 0,
-			'last_worker_ms'       => 0,
-			'last_worker_stop'     => '',
+			'status'                  => 'idle',
+			'reason'                  => '',
+			'cursor'                  => 0,
+			'total'                   => 0,
+			'scheduled'               => 0,
+			'processed'               => 0,
+			'generated'               => 0,
+			'reused'                  => 0,
+			'retained'                => 0,
+			'skipped'                 => 0,
+			'failed'                  => 0,
+			'last_reason'             => '',
+			'last_update'             => 0,
+			'generation_profile'      => '',
+			'scan_started_at'         => 0,
+			'last_worker_at'          => 0,
+			'last_worker_items'       => 0,
+			'last_worker_attempts'    => 0,
+			'last_worker_ms'          => 0,
+			'last_worker_stop'        => '',
+			'last_worker_version'     => '',
+			'last_schedule_at'        => 0,
+			'last_schedule_result'    => '',
+			'last_lock_contention_at' => 0,
+			'last_lock_recovery_at'   => 0,
 		);
 
 		return is_array( $status ) ? array_merge( $base, $status ) : $base;
@@ -678,7 +774,7 @@ final class JMI_Queue {
 		}
 
 		$locked_at = (int) get_option( self::WORKER_LOCK, 0 );
-		if ( $locked_at && $locked_at > $now - self::WORKER_TTL ) {
+		if ( $locked_at && $locked_at > $now - self::WORKER_TTL && $locked_at <= $now + 60 ) {
 			return false;
 		}
 

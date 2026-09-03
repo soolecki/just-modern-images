@@ -14,6 +14,10 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class JMI_Plugin {
 
+	const DATA_REVISION_OPTION = 'jmi_data_revision';
+	const DATA_REVISION        = 1;
+	const LEGACY_VERSION       = '0.11.3';
+
 	/**
 	 * Shared plugin instance.
 	 *
@@ -74,7 +78,10 @@ final class JMI_Plugin {
 		$renderer->register();
 		$settings->register();
 		$media_admin->register();
-		$this->maybe_upgrade( $capabilities );
+		$this->maybe_upgrade();
+		if ( method_exists( $this->queue, 'ensure_scan_scheduled' ) ) {
+			$this->queue->ensure_scan_scheduled();
+		}
 
 		add_action( 'delete_attachment', array( $this, 'delete_attachment_variants' ), 10, 1 );
 	}
@@ -82,17 +89,18 @@ final class JMI_Plugin {
 	/**
 	 * Start a fresh resumable scan after installing a new plugin version.
 	 *
-	 * @param JMI_Capabilities $capabilities Server capabilities.
 	 * @return void
 	 */
-	private function maybe_upgrade( $capabilities ) {
-		if ( JMI_VERSION === get_option( 'jmi_version', '' ) ) {
+	private function maybe_upgrade() {
+		if ( (int) get_option( self::DATA_REVISION_OPTION, 0 ) >= self::DATA_REVISION ) {
 			return;
 		}
 
-		$capabilities->invalidate();
 		$this->queue->start_scan( 'upgrade' );
-		update_option( 'jmi_version', JMI_VERSION, false );
+		update_option( self::DATA_REVISION_OPTION, self::DATA_REVISION, false );
+
+		// Keep cached 0.11.3 bootstraps quiet during a rolling OPcache refresh.
+		update_option( 'jmi_version', self::LEGACY_VERSION, false );
 	}
 
 	/**
@@ -118,7 +126,8 @@ final class JMI_Plugin {
 		);
 		$queue->start_scan( 'activation' );
 
-		update_option( 'jmi_version', JMI_VERSION, false );
+		update_option( self::DATA_REVISION_OPTION, self::DATA_REVISION, false );
+		update_option( 'jmi_version', self::LEGACY_VERSION, false );
 	}
 
 	/**

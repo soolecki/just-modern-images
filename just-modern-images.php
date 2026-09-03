@@ -46,6 +46,20 @@ function jmi_plugin() {
 	return JMI_Plugin::instance();
 }
 
+/**
+ * Prevent cached legacy migration code from resetting shared queue state.
+ *
+ * Releases from 0.11.4 onward use a monotonic data revision. A cached 0.11.3
+ * composition root may still compare this option with the release version, so
+ * the current request must always appear internally consistent.
+ *
+ * @return string Current request version.
+ */
+function jmi_legacy_version_for_request() {
+	return JMI_VERSION;
+}
+
 register_activation_hook( __FILE__, array( 'JMI_Plugin', 'activate' ) );
 register_deactivation_hook( __FILE__, array( 'JMI_Plugin', 'deactivate' ) );
+add_filter( 'pre_option_jmi_version', 'jmi_legacy_version_for_request' );
 add_action( 'init', 'jmi_plugin', 5 );

@@ -23,7 +23,7 @@ final class AdaptiveWorkerTest extends TestCase {
 		global $wpdb;
 
 		$wpdb = new JMI_Test_Attachment_Wpdb( array( 1, 2, 3, 4, 5 ) );
-		$GLOBALS['jmi_test_filters']['jmi_worker_max_items'] = static function () {
+		$GLOBALS['jmi_test_filters']['jmi_worker_max_items']   = static function () {
 			return 3;
 		};
 		$GLOBALS['jmi_test_filters']['jmi_worker_time_budget'] = static function () {
@@ -87,6 +87,61 @@ final class AdaptiveWorkerTest extends TestCase {
 		$this->assertSame( array( 1 ), $converter->attachment_ids );
 		$this->assertNotFalse( wp_next_scheduled( JMI_Queue::PROCESS_HOOK, array( 2 ) ) );
 		$this->assertSame( 'manual', ( new JMI_Media_Status() )->get( 2, $profile )['priority'] );
+	}
+
+	public function test_missing_scan_event_is_restored_without_duplicates(): void {
+		$queue   = $this->queue( new JMI_Test_Recording_Converter() );
+		$profile = ( new JMI_Quality_Profiles() )->generation_profile();
+		update_option(
+			JMI_Queue::STATUS_OPTION,
+			array(
+				'status'             => 'running',
+				'generation_profile' => $profile,
+			)
+		);
+
+		$queue->ensure_scan_scheduled();
+		$queue->ensure_scan_scheduled();
+
+		$this->assertCount( 1, $GLOBALS['jmi_test_scheduled'] );
+		$this->assertSame( JMI_Queue::SCAN_HOOK, $GLOBALS['jmi_test_scheduled'][0]['hook'] );
+		$this->assertSame( 'scheduled', $queue->status()['last_schedule_result'] );
+	}
+
+	public function test_overdue_scan_event_and_stale_lock_are_recovered(): void {
+		$queue = $this->queue( new JMI_Test_Recording_Converter() );
+		update_option( JMI_Queue::STATUS_OPTION, array( 'status' => 'queued' ) );
+		update_option( JMI_Queue::WORKER_LOCK, time() - JMI_Queue::WORKER_TTL - 1 );
+		wp_schedule_single_event( time() - JMI_Queue::SCHEDULE_GRACE - 1, JMI_Queue::SCAN_HOOK );
+
+		$queue->ensure_scan_scheduled();
+
+		$this->assertFalse( get_option( JMI_Queue::WORKER_LOCK, false ) );
+		$this->assertGreaterThan( time(), wp_next_scheduled( JMI_Queue::SCAN_HOOK ) );
+		$this->assertGreaterThan( 0, $queue->status()['last_lock_recovery_at'] );
+	}
+
+	public function test_repeated_upgrade_does_not_reset_an_active_scan(): void {
+		$queue   = $this->queue( new JMI_Test_Recording_Converter() );
+		$profile = ( new JMI_Quality_Profiles() )->generation_profile();
+		update_option(
+			JMI_Queue::STATUS_OPTION,
+			array(
+				'status'               => 'running',
+				'cursor'               => 42,
+				'processed'            => 12,
+				'generation_profile'   => $profile,
+				'last_worker_attempts' => 12,
+			)
+		);
+
+		$queue->start_scan( 'upgrade' );
+
+		$status = $queue->status();
+		$this->assertSame( 42, $status['cursor'] );
+		$this->assertSame( 12, $status['processed'] );
+		$this->assertSame( 12, $status['last_worker_attempts'] );
+		$this->assertNotFalse( wp_next_scheduled( JMI_Queue::SCAN_HOOK ) );
 	}
 
 	private function queue( $converter ): JMI_Queue {
