@@ -622,7 +622,11 @@ final class JMI_Queue {
 		if ( ! wp_next_scheduled( self::SCAN_HOOK ) ) {
 			$scheduled = wp_schedule_single_event( time() + max( 1, (int) $delay ), self::SCAN_HOOK, array(), true );
 			$succeeded = ! is_wp_error( $scheduled ) && false !== $scheduled;
-			$status    = $this->status();
+			if ( ! $succeeded && wp_next_scheduled( self::SCAN_HOOK ) ) {
+				// Another request may have restored the same event concurrently.
+				$succeeded = true;
+			}
+			$status = $this->status();
 
 			$status['last_schedule_at']     = time();
 			$status['last_schedule_result'] = $succeeded ? 'scheduled' : 'failed';

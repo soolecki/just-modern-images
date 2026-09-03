@@ -3,7 +3,7 @@ Tags: webp, avif, images, performance, optimization
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.11.3
+Stable tag: 0.11.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -57,6 +57,7 @@ The plugin processes images on your own server. It does not contact an external 
 
 Existing images are queued automatically. WordPress processes the queue through WP-Cron in small, retry-safe jobs.
 Each cron request uses an adaptive worker budget. Fast servers continue with more images, while the worker yields before the safe time, memory, or per-run image limit is exhausted.
+If a one-time worker event disappears after an interrupted PHP request, the plugin restores it automatically during the next WordPress initialization.
 
 == Frequently Asked Questions ==
 
@@ -97,6 +98,16 @@ The plugin uses normal WordPress upload URLs and provides a filter for CDN integ
 Not in this release. The first release intentionally covers attachment images rendered through standard WordPress APIs without buffering or rewriting the entire page.
 
 == Changelog ==
+
+= 0.11.4 =
+
+* Restored missing or overdue library worker events automatically.
+* Recovered abandoned worker locks, including invalid future timestamps caused by server clock differences.
+* Separated monotonic data migrations from release numbers so mixed OPcache revisions cannot repeatedly reset current queue state.
+* Kept capability profiles intact during ordinary plugin updates.
+* Preserved the most recent worker metrics when a new scan is requested.
+* Added the next worker event, lock state, and last observed worker code version to diagnostics.
+* Added a clear warning when cron activity is visible but no current worker run is reported.
 
 = 0.11.3 =
 

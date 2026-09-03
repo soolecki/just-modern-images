@@ -100,7 +100,7 @@ final class JMI_Plugin {
 		update_option( self::DATA_REVISION_OPTION, self::DATA_REVISION, false );
 
 		// Keep cached 0.11.3 bootstraps quiet during a rolling OPcache refresh.
-		update_option( 'jmi_version', self::LEGACY_VERSION, false );
+		self::store_legacy_version();
 	}
 
 	/**
@@ -127,7 +127,25 @@ final class JMI_Plugin {
 		$queue->start_scan( 'activation' );
 
 		update_option( self::DATA_REVISION_OPTION, self::DATA_REVISION, false );
+		self::store_legacy_version();
+	}
+
+	/**
+	 * Persist the final legacy migration value without the request consistency filter.
+	 *
+	 * @return void
+	 */
+	private static function store_legacy_version() {
+		$has_filter = function_exists( 'jmi_legacy_version_for_request' );
+		if ( $has_filter ) {
+			remove_filter( 'pre_option_jmi_version', 'jmi_legacy_version_for_request' );
+		}
+
 		update_option( 'jmi_version', self::LEGACY_VERSION, false );
+
+		if ( $has_filter ) {
+			add_filter( 'pre_option_jmi_version', 'jmi_legacy_version_for_request' );
+		}
 	}
 
 	/**

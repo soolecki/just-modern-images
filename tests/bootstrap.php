@@ -63,6 +63,8 @@ function absint( $value ) {
 
 function add_filter() {}
 
+function remove_filter() {}
+
 function add_action() {}
 
 function do_action() {}

@@ -150,6 +150,15 @@ of the PHP memory limit and preserves five seconds before PHP's execution limit.
 These limits are bounded filters for hosting integrations, not product settings.
 The cursor is persisted after every attempted attachment so a timeout, fatal
 error, or missed cron request cannot restart a large library from the beginning.
+Every WordPress initialization checks an active scan for a viable next event.
+Missing events, events overdue by more than five minutes, and abandoned worker
+locks are restored automatically. Scheduling failures and the current event,
+lock, and worker-code state remain visible to administrators.
+
+Data migrations use a monotonic integer revision rather than the release
+version. An older application server therefore never downgrades shared state or
+restarts a scan merely because its OPcache has not refreshed yet. The legacy
+release option remains pinned for compatibility with cached 0.11.3 bootstraps.
 
 The queue has four lanes, in descending order: a manual Media Library request,
 a new upload, an attachment needed by a frontend response, and the background

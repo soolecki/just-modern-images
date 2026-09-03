@@ -412,7 +412,7 @@ final class JMI_Settings {
 	private function server_summary() {
 		if ( method_exists( $this->capabilities, 'diagnostic_summary' ) ) {
 			$summary                   = $this->capabilities->diagnostic_summary();
-			$summary['rolling_update'] = version_compare( JMI_VERSION, '0.11.3', '<' );
+			$summary['rolling_update'] = version_compare( JMI_VERSION, '0.11.4', '<' );
 			return $summary;
 		}
 

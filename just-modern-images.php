@@ -3,7 +3,7 @@
  * Plugin Name: Just Modern Images
  * Plugin URI: https://github.com/soolecki/just-modern-images
  * Description: Generates smaller WebP and AVIF companions while keeping every original image intact.
- * Version: 0.11.3
+ * Version: 0.11.4
  * Requires at least: 6.5
  * Requires PHP: 7.4
  * Author: Sebastian Sołecki
@@ -19,7 +19,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'JMI_VERSION', '0.11.3' );
+define( 'JMI_VERSION', '0.11.4' );
 define( 'JMI_PLUGIN_FILE', __FILE__ );
 define( 'JMI_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 
