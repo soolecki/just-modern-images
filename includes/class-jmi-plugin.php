@@ -104,6 +104,9 @@ final class JMI_Plugin {
 		if ( method_exists( $this->queue, 'ensure_scan_scheduled' ) ) {
 			$this->queue->ensure_scan_scheduled();
 		}
+		if ( method_exists( $this->queue, 'ensure_dormant_scan' ) ) {
+			$this->queue->ensure_dormant_scan();
+		}
 
 		add_action( 'delete_attachment', array( $this, 'delete_attachment_variants' ), 10, 1 );
 		add_action( 'wp_initialize_site', array( __CLASS__, 'initialize_site' ), 200, 1 );

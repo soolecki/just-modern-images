@@ -27,6 +27,7 @@ $GLOBALS['jmi_test_site_scheduled']    = array();
 $GLOBALS['jmi_test_network_options']   = array();
 $GLOBALS['jmi_test_site_ids']          = array( 1 );
 $GLOBALS['jmi_test_network_active']    = false;
+$GLOBALS['jmi_test_is_admin']          = false;
 
 function __( $text, $domain = 'default' ) {
 	$GLOBALS['jmi_test_translation_calls'][] = $domain;
@@ -345,7 +346,7 @@ function is_wp_error( $value = null ) {
 }
 
 function is_admin() {
-	return false;
+	return ! empty( $GLOBALS['jmi_test_is_admin'] );
 }
 
 function wp_doing_ajax() {

@@ -15,21 +15,15 @@ The project is currently under active development and is not ready for productio
 ## Current status
 
 The original prototype has been replaced with a fail-safe conversion pipeline.
-Version 0.11 adds observable Media Library state, explicit manual priority,
-request-based processing priority without visitor tracking, and a graphical
-progress screen. Version 0.11.1 adds actionable diagnostics, per-server capability
-profiles for clustered installations, and immutable output publishing designed
-for shared filesystems. Version 0.11.2 keeps adjacent component revisions
-compatible while independent application servers refresh their opcode caches.
-Version 0.11.3 adds request-wide adaptive cron budgets and one shared worker lock
-for overlapping clustered cron calls. Version 0.11.4 makes the queue
-self-healing after interrupted single events and replaces release-number
-migrations with a monotonic data revision that remains stable during rolling
-OPcache refreshes. Version 0.11.5 prevents delayed events from reopening settled
-images and adds a bounded, privacy-safe history of worker runs with before and
-after state. Version 0.11.6 adds explicit opt-in reporting for privately tested
-installations and a standalone, password-protected fleet dashboard. The project
-is still in pre-release development and needs broader
+Version 0.12 focuses on operating reliably across different hosting environments.
+It recovers missing work directly from a live cron request, adapts its runtime to
+the available server budget, treats encoder health per attachment instead of per
+thumbnail, and avoids consuming a library scan while every encoder is paused.
+Network activation initializes each multisite site in its own WordPress context,
+and new sites are handled automatically. Short immutable filenames, verified
+race-safe publishing, and bounded retries improve behavior on Windows, IIS, and
+SMB-backed uploads. The settings screen now clearly shows when background work
+is active. The project is still in pre-release development and needs broader
 integration testing before a public WordPress.org release.
 
 ## Development

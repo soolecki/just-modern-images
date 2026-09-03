@@ -11,6 +11,7 @@ final class AdaptiveWorkerTest extends TestCase {
 		$GLOBALS['jmi_test_scheduled']  = array();
 		$GLOBALS['jmi_test_filters']    = array();
 		$GLOBALS['jmi_test_doing_cron'] = false;
+		$GLOBALS['jmi_test_is_admin']    = false;
 		$GLOBALS['jmi_test_mime_types'] = array(
 			1 => 'image/jpeg',
 			2 => 'image/jpeg',
@@ -172,6 +173,21 @@ final class AdaptiveWorkerTest extends TestCase {
 		$this->assertSame( 45, $method->invoke( $queue, 300, 'nginx' ) );
 		$this->assertSame( 20, $method->invoke( $queue, 30, 'nginx' ) );
 		$this->assertSame( 20, $method->invoke( $queue, 0, 'Microsoft-IIS/10.0' ) );
+	}
+
+	public function test_dormant_queue_is_recreated_during_an_admin_request(): void {
+		global $wpdb;
+
+		$wpdb                          = new JMI_Test_Attachment_Wpdb( array( 1, 2 ) );
+		$GLOBALS['jmi_test_is_admin'] = true;
+		$queue                         = $this->queue( new JMI_Test_Recording_Converter() );
+		update_option( JMI_Queue::STATUS_OPTION, array( 'status' => 'complete' ) );
+
+		$queue->ensure_dormant_scan();
+
+		$this->assertSame( 'queued', $queue->status()['status'] );
+		$this->assertSame( 'recovery', $queue->status()['reason'] );
+		$this->assertNotFalse( wp_next_scheduled( JMI_Queue::SCAN_HOOK ) );
 	}
 
 	public function test_repeated_upgrade_does_not_reset_an_active_scan(): void {

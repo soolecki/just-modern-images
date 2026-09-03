@@ -14,14 +14,16 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class JMI_Queue {
 
-	const PROCESS_HOOK   = 'jmi_process_attachment';
-	const SCAN_HOOK      = 'jmi_scan_library';
-	const STATUS_OPTION  = 'jmi_queue_status';
-	const LOCK_PREFIX    = 'jmi_attachment_lock_';
-	const LOCK_TTL       = 900;
-	const WORKER_LOCK    = 'jmi_scan_worker_lock';
-	const WORKER_TTL     = 300;
-	const SCHEDULE_GRACE = 300;
+	const PROCESS_HOOK    = 'jmi_process_attachment';
+	const SCAN_HOOK       = 'jmi_scan_library';
+	const STATUS_OPTION   = 'jmi_queue_status';
+	const LOCK_PREFIX     = 'jmi_attachment_lock_';
+	const LOCK_TTL        = 900;
+	const WORKER_LOCK     = 'jmi_scan_worker_lock';
+	const HEALTH_OPTION   = 'jmi_queue_health_checked';
+	const WORKER_TTL      = 300;
+	const SCHEDULE_GRACE  = 300;
+	const HEALTH_INTERVAL = 3600;
 
 	/**
 	 * Attachment converter.
@@ -500,6 +502,40 @@ final class JMI_Queue {
 		}
 
 		$this->schedule_scan( 1 );
+	}
+
+	/**
+	 * Recreate dormant work when unsettled media exists without an active scan.
+	 *
+	 * The check is limited to administrator and cron requests and runs at most
+	 * hourly, keeping ordinary frontend traffic free of library-count queries.
+	 *
+	 * @return void
+	 */
+	public function ensure_dormant_scan() {
+		$status = $this->status();
+		if ( in_array( $status['status'], array( 'queued', 'running' ), true ) ) {
+			$this->ensure_scan_scheduled();
+			return;
+		}
+
+		$is_cron = function_exists( 'wp_doing_cron' ) && wp_doing_cron();
+		if ( ! is_admin() && ! $is_cron ) {
+			return;
+		}
+
+		$now          = time();
+		$last_checked = (int) get_option( self::HEALTH_OPTION, 0 );
+		if ( $last_checked > $now - self::HEALTH_INTERVAL && $last_checked <= $now + 60 ) {
+			return;
+		}
+		update_option( self::HEALTH_OPTION, $now, false );
+
+		$stats     = $this->media_status->library_stats( $this->profiles->generation_profile() );
+		$unsettled = (int) ( $stats['pending'] ?? 0 ) + (int) ( $stats['queued'] ?? 0 ) + (int) ( $stats['processing'] ?? 0 ) + (int) ( $stats['stale'] ?? 0 );
+		if ( $unsettled > 0 ) {
+			$this->start_scan( 'recovery' );
+		}
 	}
 
 	/**
@@ -994,13 +1030,15 @@ final class JMI_Queue {
 				'reviewed'  => (int) ( $stats['reviewed'] ?? 0 ),
 			),
 			'queue'   => array(
-				'status'    => (string) ( $status['status'] ?? '' ),
-				'reason'    => (string) ( $status['reason'] ?? '' ),
-				'cursor'    => (int) ( $status['cursor'] ?? 0 ),
-				'total'     => (int) ( $status['total'] ?? 0 ),
-				'processed' => (int) ( $status['processed'] ?? 0 ),
-				'generated' => (int) ( $status['generated'] ?? 0 ),
-				'failed'    => (int) ( $status['failed'] ?? 0 ),
+				'status'     => (string) ( $status['status'] ?? '' ),
+				'reason'     => (string) ( $status['reason'] ?? '' ),
+				'cursor'     => (int) ( $status['cursor'] ?? 0 ),
+				'total'      => (int) ( $status['total'] ?? 0 ),
+				'processed'  => (int) ( $status['processed'] ?? 0 ),
+				'generated'  => (int) ( $status['generated'] ?? 0 ),
+				'failed'     => (int) ( $status['failed'] ?? 0 ),
+				'recoveries' => (int) ( $status['recovery_count'] ?? 0 ),
+				'recovery'   => (string) ( $status['last_recovery_reason'] ?? '' ),
 			),
 		);
 	}
@@ -1135,6 +1173,7 @@ final class JMI_Queue {
 	 */
 	private function release_worker_lock() {
 		delete_option( self::WORKER_LOCK );
+		delete_option( self::HEALTH_OPTION );
 	}
 
 	/**

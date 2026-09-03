@@ -322,8 +322,9 @@ final class JMI_Converter {
 				return $this->outcome( $validation['status'], $validation['reason'], $mime_type, $generation_profile );
 			}
 
-			if ( ! $this->publish_file( $saved_path, $target_path ) ) {
-				return $this->outcome( 'failed', 'publish_copy_failed', $mime_type, $generation_profile );
+			$publish_reason = '';
+			if ( ! $this->publish_file( $saved_path, $target_path, $publish_reason ) ) {
+				return $this->outcome( 'failed', $publish_reason ? $publish_reason : 'publish_copy_failed', $mime_type, $generation_profile );
 			}
 
 			$variant = $this->ready_variant( $mime_type, $relative_path, $generation_profile, $validation, 'generated' );
@@ -450,9 +451,11 @@ final class JMI_Converter {
 	 *
 	 * @param string $temporary_path Temporary file path.
 	 * @param string $target_path    Final file path.
+	 * @param string $failure_reason Stable failure reason returned by reference.
 	 * @return bool
 	 */
-	private function publish_file( $temporary_path, $target_path ) {
+	private function publish_file( $temporary_path, $target_path, &$failure_reason = '' ) {
+		$failure_reason = '';
 		for ( $attempt = 0; $attempt < 3; ++$attempt ) {
 			clearstatcache( true, $target_path );
 			if ( file_exists( $target_path ) ) {
@@ -461,6 +464,7 @@ final class JMI_Converter {
 					return true;
 				}
 
+				$failure_reason = 'publish_target_conflict';
 				return false;
 			}
 
@@ -488,6 +492,7 @@ final class JMI_Converter {
 			}
 		}
 
+		$failure_reason = 'storage_write_failed';
 		return false;
 	}
 

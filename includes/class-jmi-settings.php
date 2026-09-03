@@ -165,6 +165,9 @@ final class JMI_Settings {
 		$profile             = $profiles[ $selected ];
 		$ready_pct           = $stats['total'] ? (int) round( ( $stats['ready'] / $stats['total'] ) * 100 ) : 0;
 		$reviewed_pct        = $stats['total'] ? (int) round( ( $stats['reviewed'] / $stats['total'] ) * 100 ) : 0;
+		$waiting_count       = (int) $stats['pending'] + (int) $stats['queued'] + (int) $stats['processing'] + (int) $stats['stale'];
+		$processing_active   = $waiting_count > 0 && in_array( $status['status'], array( 'queued', 'running' ), true );
+		$encoders_paused     = 'encoder_paused' === sanitize_key( $status['last_worker_stop'] ?? '' );
 		$last_reason         = sanitize_key( $status['last_reason'] ?? '' );
 		$worker_diagnostics  = method_exists( $this->queue, 'diagnostics' )
 			? $this->queue->diagnostics()
@@ -235,7 +238,24 @@ final class JMI_Settings {
 				</div>
 			<?php endif; ?>
 
-			<section class="jmi-overview">
+			<?php if ( $processing_active ) : ?>
+				<section class="jmi-processing<?php echo $encoders_paused ? ' jmi-processing--paused' : ''; ?>" role="status" aria-live="polite">
+					<div class="jmi-processing-copy">
+						<span class="jmi-processing-icon" aria-hidden="true"></span>
+						<div>
+							<strong><?php echo esc_html( $encoders_paused ? __( 'Processing will resume automatically', 'just-modern-images' ) : __( 'Images are being processed', 'just-modern-images' ) ); ?></strong>
+							<span><?php echo esc_html( $encoders_paused ? __( 'The image encoders are cooling down after repeated failures. Existing modern files remain active.', 'just-modern-images' ) : __( 'Work continues safely in the background. You can leave this page.', 'just-modern-images' ) ); ?></span>
+						</div>
+					</div>
+					<span class="jmi-processing-count">
+						<?php /* translators: %s: number of images waiting for background processing. */ ?>
+						<?php echo esc_html( sprintf( _n( '%s image waiting', '%s images waiting', $waiting_count, 'just-modern-images' ), number_format_i18n( $waiting_count ) ) ); ?>
+					</span>
+					<div class="jmi-indeterminate-progress" role="progressbar" aria-label="<?php esc_attr_e( 'Background image processing', 'just-modern-images' ); ?>"><span></span></div>
+				</section>
+			<?php endif; ?>
+
+			<section class="jmi-overview"<?php echo $processing_active ? ' aria-busy="true"' : ''; ?>>
 				<div class="jmi-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="<?php echo esc_attr( $ready_pct ); ?>" style="--jmi-progress: <?php echo esc_attr( $ready_pct ); ?>%">
 					<div><strong><?php echo esc_html( $ready_pct . '%' ); ?></strong><span><?php esc_html_e( 'ready', 'just-modern-images' ); ?></span></div>
 				</div>
@@ -252,7 +272,7 @@ final class JMI_Settings {
 			<div class="jmi-stat-grid">
 				<div class="jmi-stat"><span><?php esc_html_e( 'Ready', 'just-modern-images' ); ?></span><strong><?php echo esc_html( number_format_i18n( $stats['ready'] ) ); ?></strong></div>
 				<div class="jmi-stat"><span><?php esc_html_e( 'Partly ready', 'just-modern-images' ); ?></span><strong><?php echo esc_html( number_format_i18n( $stats['partial'] ) ); ?></strong></div>
-				<div class="jmi-stat"><span><?php esc_html_e( 'Waiting', 'just-modern-images' ); ?></span><strong><?php echo esc_html( number_format_i18n( $stats['pending'] + $stats['queued'] + $stats['processing'] + $stats['stale'] ) ); ?></strong></div>
+				<div class="jmi-stat"><span><?php esc_html_e( 'Waiting', 'just-modern-images' ); ?></span><strong><?php echo esc_html( number_format_i18n( $waiting_count ) ); ?></strong></div>
 				<div class="jmi-stat jmi-stat--danger"><span><?php esc_html_e( 'Needs attention', 'just-modern-images' ); ?></span><strong><?php echo esc_html( number_format_i18n( $stats['failed'] ) ); ?></strong></div>
 			</div>
 
@@ -305,6 +325,9 @@ final class JMI_Settings {
 						<div><dt><?php esc_html_e( 'Next worker event', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->worker_event_label( $worker_diagnostics, $status['status'] ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Worker lock', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->worker_lock_label( $worker_diagnostics ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Worker code', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->worker_version_label( $status['last_worker_version'] ?? '' ) ); ?></dd></div>
+						<?php if ( ! empty( $status['recovery_count'] ) ) : ?>
+							<div><dt><?php esc_html_e( 'Automatic recoveries', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( number_format_i18n( (int) $status['recovery_count'] ) ); ?> <code><?php echo esc_html( sanitize_key( $status['last_recovery_reason'] ?? '' ) ); ?></code></dd></div>
+						<?php endif; ?>
 						<div><dt><?php esc_html_e( 'Last activity', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->last_activity_label( $status['last_update'] ) ); ?></dd></div>
 						<div><dt><?php esc_html_e( 'Last result', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $last_reason ? $this->diagnostic_label( $last_reason ) : __( 'No issues recorded', 'just-modern-images' ) ); ?>
 						<?php
@@ -313,7 +336,7 @@ final class JMI_Settings {
 							<code><?php echo esc_html( $last_reason ); ?></code><?php endif; ?></dd></div>
 					</dl>
 					<?php if ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON ) : ?>
-						<p class="jmi-warning"><?php esc_html_e( 'Built-in WP-Cron is disabled, so an external runner must call WordPress regularly. If Last activity keeps changing, the runner is working.', 'just-modern-images' ); ?></p>
+						<p class="jmi-warning"><?php echo esc_html( is_multisite() ? __( 'Built-in WP-Cron is disabled. The external runner must call every site in this network regularly; each site has its own safe processing queue.', 'just-modern-images' ) : __( 'Built-in WP-Cron is disabled, so an external runner must call WordPress regularly. If Last activity keeps changing, the runner is working.', 'just-modern-images' ) ); ?></p>
 					<?php endif; ?>
 					<form action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" method="post">
 						<input type="hidden" name="action" value="jmi_rebuild">
@@ -1034,6 +1057,7 @@ final class JMI_Settings {
 			'memory_pressure'           => __( 'The memory reserve was reached', 'just-modern-images' ),
 			'item_limit'                => __( 'The per-run image limit was reached', 'just-modern-images' ),
 			'unexpected_worker_failure' => __( 'The worker stopped after an unexpected error', 'just-modern-images' ),
+			'encoder_paused'            => __( 'All image encoders are temporarily paused', 'just-modern-images' ),
 		);
 		$reason = sanitize_key( $reason );
 

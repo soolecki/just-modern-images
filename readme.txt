@@ -3,7 +3,7 @@ Tags: webp, avif, images, performance, optimization
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.11.6
+Stable tag: 0.12.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -61,6 +61,10 @@ Existing images are queued automatically. WordPress processes the queue through 
 Each cron request uses an adaptive worker budget. Fast servers continue with more images, while the worker yields before the safe time, memory, or per-run image limit is exhausted.
 If a one-time worker event disappears after an interrupted PHP request, the plugin restores it automatically during the next WordPress initialization.
 
+Network activation initializes an independent queue for every multisite site and automatically prepares sites added later. When an external cron runner is used, it must call every public site in the network because WordPress stores cron events per site.
+
+Generated files use short immutable names in the same directory as their sources. Publishing verifies the complete file and tolerates short sharing delays, which makes the process safer on Windows, IIS, and SMB-backed uploads.
+
 == Frequently Asked Questions ==
 
 = Does the plugin delete or replace my original images? =
@@ -89,7 +93,7 @@ The Media Library is refreshed in the background. Existing valid modern files re
 
 = How much work happens during one cron request? =
 
-The worker measures how long completed images take and starts another only when a safe reserve remains. By default it may use up to 20 seconds and 50 images across all Just Modern Images events in one request. It also yields at 80% of the PHP memory limit and leaves five seconds before the PHP execution limit. These are internal safety limits, not settings that site owners need to manage.
+The worker measures how long completed images take and starts another only when a safe reserve remains. By default it may use up to 45 seconds on servers whose PHP limit leaves enough room, while IIS and short-lived requests use a conservative budget of up to 20 seconds. It processes at most 50 images across all Just Modern Images events in one request, yields at 80% of the PHP memory limit, and leaves five seconds before the PHP execution limit. These are internal safety limits, not settings that site owners need to manage.
 
 = Does it work with a CDN? =
 
@@ -100,6 +104,19 @@ The plugin uses normal WordPress upload URLs and provides a filter for CDN integ
 Not in this release. The first release intentionally covers attachment images rendered through standard WordPress APIs without buffering or rewriting the entire page.
 
 == Changelog ==
+
+= 0.12.0 =
+
+* Added an animated background-processing indicator with a clear waiting count and paused-encoder state.
+* Recovered missing or due scans directly inside verified WordPress cron requests.
+* Expanded the worker budget on servers with time to spare while retaining conservative IIS and PHP-limit reserves.
+* Changed encoder health sampling from individual thumbnails to one result per attachment and excluded source or storage failures.
+* Paused library traversal when every format encoder is temporarily unavailable instead of settling images as skipped.
+* Added network activation, deactivation, and new-site initialization for multisite with isolated per-site queues.
+* Added a shared network identifier and real heartbeat snapshots to opt-in private-test reports.
+* Added short immutable output names, bounded copy retries, and race-safe verification for Windows and SMB storage.
+* Added storage type and writability signals to opt-in diagnostics without sending local filesystem paths.
+* Queued one data-revision scan so images skipped by previous circuit-breaker behavior are reconsidered.
 
 = 0.11.6 =
 

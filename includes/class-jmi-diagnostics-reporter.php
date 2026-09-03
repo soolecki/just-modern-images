@@ -824,13 +824,15 @@ final class JMI_Diagnostics_Reporter {
 		return array(
 			'library' => $counts,
 			'queue'   => array(
-				'status'    => sanitize_key( $queue['status'] ?? '' ),
-				'reason'    => sanitize_key( $queue['reason'] ?? '' ),
-				'cursor'    => max( 0, (int) ( $queue['cursor'] ?? 0 ) ),
-				'total'     => max( 0, (int) ( $queue['total'] ?? 0 ) ),
-				'processed' => max( 0, (int) ( $queue['processed'] ?? 0 ) ),
-				'generated' => max( 0, (int) ( $queue['generated'] ?? 0 ) ),
-				'failed'    => max( 0, (int) ( $queue['failed'] ?? 0 ) ),
+				'status'     => sanitize_key( $queue['status'] ?? '' ),
+				'reason'     => sanitize_key( $queue['reason'] ?? '' ),
+				'cursor'     => max( 0, (int) ( $queue['cursor'] ?? 0 ) ),
+				'total'      => max( 0, (int) ( $queue['total'] ?? 0 ) ),
+				'processed'  => max( 0, (int) ( $queue['processed'] ?? 0 ) ),
+				'generated'  => max( 0, (int) ( $queue['generated'] ?? 0 ) ),
+				'failed'     => max( 0, (int) ( $queue['failed'] ?? 0 ) ),
+				'recoveries' => max( 0, (int) ( $queue['recoveries'] ?? 0 ) ),
+				'recovery'   => sanitize_key( $queue['recovery'] ?? '' ),
 			),
 		);
 	}
