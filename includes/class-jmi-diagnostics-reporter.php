@@ -429,7 +429,7 @@ final class JMI_Diagnostics_Reporter {
 		return 'https' === strtolower( (string) $scheme )
 			&& is_string( $host )
 			&& '' !== $host
-			&& (bool) preg_match( '/^[a-zA-Z0-9_-]{32,100}$/', $fleet_key );
+			&& (bool) preg_match( '/^[a-zA-Z0-9_-]{20,100}$/', $fleet_key );
 	}
 
 	/**

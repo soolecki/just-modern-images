@@ -57,8 +57,8 @@ if ( true !== $zip->open( $zip_path, ZipArchive::CREATE ) ) {
 
 foreach ( $files as $relative_path ) {
 	if ( 'includes/class-jmi-diagnostics-reporter.php' === $relative_path && ( '' !== $diagnostics_endpoint || '' !== $diagnostics_fleet_key ) ) {
-		if ( '' === $diagnostics_endpoint || ! preg_match( '/^[a-zA-Z0-9_-]{32,100}$/', $diagnostics_fleet_key ) ) {
-			fwrite( STDERR, "JMI_DIAGNOSTICS_ENDPOINT and a 32-100 character JMI_DIAGNOSTICS_FLEET_KEY must be provided together.\n" );
+		if ( '' === $diagnostics_endpoint || ! preg_match( '/^[a-zA-Z0-9_-]{20,100}$/', $diagnostics_fleet_key ) ) {
+			fwrite( STDERR, "JMI_DIAGNOSTICS_ENDPOINT and a 20-100 character JMI_DIAGNOSTICS_FLEET_KEY must be provided together.\n" );
 			$zip->close();
 			exit( 1 );
 		}
