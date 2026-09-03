@@ -84,6 +84,29 @@ final class JMI_Capabilities {
 	}
 
 	/**
+	 * Return the first recovery time when every managed encoder is paused.
+	 *
+	 * A zero result means that at least one format can still be processed.
+	 *
+	 * @return int Unix timestamp, or zero.
+	 */
+	public function all_formats_paused_until() {
+		$formats      = $this->get_all();
+		$paused_until = array();
+
+		foreach ( array_keys( $this->formats() ) as $mime_type ) {
+			$format = $formats[ $mime_type ] ?? array();
+			if ( 'temporarily_disabled' !== ( $format['state'] ?? '' ) ) {
+				return 0;
+			}
+
+			$paused_until[] = max( time() + 1, (int) ( $format['paused_until'] ?? 0 ) );
+		}
+
+		return $paused_until ? min( $paused_until ) : 0;
+	}
+
+	/**
 	 * Probe all output formats and persist the results for this environment.
 	 *
 	 * @return array<string, array<string, mixed>>
@@ -129,8 +152,6 @@ final class JMI_Capabilities {
 	 */
 	public function record_failure( $mime_type, $reason ) {
 		$encoder_failures = array(
-			'decode_failed',
-			'empty_output',
 			'encode_failed',
 			'encode_warning',
 			'invalid_output',
@@ -165,6 +186,28 @@ final class JMI_Capabilities {
 		$health['_updated_at']               = $now;
 		$storage['profiles'][ $fingerprint ] = $health;
 		$storage['profiles']                 = $this->prune_profiles( $storage['profiles'] );
+		update_option( self::HEALTH_OPTION, $storage, false );
+	}
+
+	/**
+	 * Clear an expired failure streak after a real encode succeeds.
+	 *
+	 * @param string $mime_type Output MIME type.
+	 * @return void
+	 */
+	public function record_success( $mime_type ) {
+		if ( ! isset( $this->formats()[ $mime_type ] ) ) {
+			return;
+		}
+
+		$fingerprint = $this->fingerprint();
+		$storage     = $this->get_health_storage( $fingerprint );
+		if ( empty( $storage['profiles'][ $fingerprint ][ $mime_type ] ) ) {
+			return;
+		}
+
+		unset( $storage['profiles'][ $fingerprint ][ $mime_type ] );
+		$storage['profiles'][ $fingerprint ]['_updated_at'] = time();
 		update_option( self::HEALTH_OPTION, $storage, false );
 	}
 

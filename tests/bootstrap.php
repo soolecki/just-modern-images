@@ -18,6 +18,7 @@ $GLOBALS['jmi_test_filters']           = array();
 $GLOBALS['jmi_test_translation_calls'] = array();
 $GLOBALS['jmi_test_remote_requests']   = array();
 $GLOBALS['jmi_test_remote_response']   = array( 'response' => array( 'code' => 202 ) );
+$GLOBALS['jmi_test_doing_cron']        = false;
 
 function __( $text, $domain = 'default' ) {
 	$GLOBALS['jmi_test_translation_calls'][] = $domain;
@@ -246,7 +247,7 @@ function is_feed() {
 }
 
 function wp_doing_cron() {
-	return false;
+	return ! empty( $GLOBALS['jmi_test_doing_cron'] );
 }
 
 function wp_parse_url( $url, $component = -1 ) {

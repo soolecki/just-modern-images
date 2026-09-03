@@ -96,6 +96,13 @@ final class JMI_Queue {
 	private static $request_worker_item_time = 0.0;
 
 	/**
+	 * Prevent a recovered event from running twice in the same cron request.
+	 *
+	 * @var bool
+	 */
+	private static $cron_recovery_ran = false;
+
+	/**
 	 * Set up the queue.
 	 *
 	 * @param JMI_Converter         $converter    Attachment converter.
@@ -121,7 +128,46 @@ final class JMI_Queue {
 		add_filter( 'wp_generate_attachment_metadata', array( $this, 'schedule_after_metadata' ), 100, 2 );
 		add_action( self::PROCESS_HOOK, array( $this, 'process_attachment' ) );
 		add_action( self::SCAN_HOOK, array( $this, 'scan_library' ) );
+		add_action( 'wp_loaded', array( $this, 'run_due_scan_during_cron' ), 1 );
 		add_action( 'shutdown', array( $this, 'flush_demanded' ), 20 );
+	}
+
+	/**
+	 * Claim a missing or due scan from a cron request that is known to be alive.
+	 *
+	 * Some external runners reach wp-cron.php correctly while a single event is
+	 * lost before dispatch. Running the resumable scanner here keeps that site
+	 * moving without adding work to normal frontend requests.
+	 *
+	 * @return void
+	 */
+	public function run_due_scan_during_cron() {
+		$is_cron = function_exists( 'wp_doing_cron' ) ? wp_doing_cron() : defined( 'DOING_CRON' ) && DOING_CRON;
+		if ( ! $is_cron || self::$cron_recovery_ran ) {
+			return;
+		}
+
+		$status = $this->status();
+		if ( ! in_array( $status['status'], array( 'queued', 'running' ), true ) ) {
+			return;
+		}
+
+		$next_event = wp_next_scheduled( self::SCAN_HOOK );
+		if ( $next_event && (int) $next_event > time() + 1 ) {
+			return;
+		}
+
+		if ( $next_event ) {
+			wp_unschedule_event( $next_event, self::SCAN_HOOK );
+		}
+
+		self::$cron_recovery_ran        = true;
+		$status['last_recovery_at']     = time();
+		$status['last_recovery_reason'] = $next_event ? 'due_event_claimed' : 'missing_event_claimed';
+		$status['recovery_count']       = (int) ( $status['recovery_count'] ?? 0 ) + 1;
+		$status['last_update']          = time();
+		update_option( self::STATUS_OPTION, $status, false );
+		$this->scan_library();
 	}
 
 	/**
@@ -391,6 +437,9 @@ final class JMI_Queue {
 				'next_worker_due'         => 0,
 				'last_lock_contention_at' => (int) $current['last_lock_contention_at'],
 				'last_lock_recovery_at'   => (int) $current['last_lock_recovery_at'],
+				'last_recovery_at'        => (int) $current['last_recovery_at'],
+				'last_recovery_reason'    => (string) $current['last_recovery_reason'],
+				'recovery_count'          => (int) $current['recovery_count'],
 			),
 			false
 		);
@@ -491,6 +540,11 @@ final class JMI_Queue {
 		$run_source             = sanitize_key( $status['reason'] ?? 'background' );
 		$run_before             = $this->activity_log ? $this->safe_activity_snapshot( null, $status ) : array();
 		$this->active_run_items = array();
+		$paused_until           = $this->capabilities ? $this->capabilities->all_formats_paused_until() : 0;
+
+		if ( $paused_until ) {
+			$stop_reason = 'encoder_paused';
+		}
 
 		try {
 			while ( ! $stop_reason ) {
@@ -586,7 +640,8 @@ final class JMI_Queue {
 		}
 
 		if ( ! $complete ) {
-			$this->schedule_scan( 5 );
+			$delay = $paused_until ? max( 5, min( 3600, $paused_until - time() + 1 ) ) : 5;
+			$this->schedule_scan( $delay );
 		}
 	}
 
@@ -597,8 +652,10 @@ final class JMI_Queue {
 	 * @return float Seconds available.
 	 */
 	private function worker_time_budget( $started_at ) {
-		$configured = min( 45, max( 5, (int) apply_filters( 'jmi_worker_time_budget', 20 ) ) );
 		$php_limit  = (int) ini_get( 'max_execution_time' );
+		$software   = isset( $_SERVER['SERVER_SOFTWARE'] ) ? (string) $_SERVER['SERVER_SOFTWARE'] : '';
+		$default    = $this->default_worker_time_budget( $php_limit, $software );
+		$configured = min( 45, max( 5, (int) apply_filters( 'jmi_worker_time_budget', $default ) ) );
 
 		if ( $php_limit <= 0 ) {
 			return (float) $configured;
@@ -610,6 +667,28 @@ final class JMI_Queue {
 		$available       = ( $request_started + $php_limit - 5 ) - $started_at;
 
 		return max( 0.0, min( (float) $configured, $available ) );
+	}
+
+	/**
+	 * Choose an efficient default while respecting web-server timeouts.
+	 *
+	 * IIS FastCGI commonly enforces a request timeout outside PHP, so an
+	 * unlimited PHP setting is not proof that a long request is safe.
+	 *
+	 * @param int    $php_limit PHP max execution time in seconds.
+	 * @param string $software  Web server software string.
+	 * @return int
+	 */
+	private function default_worker_time_budget( $php_limit, $software ) {
+		if ( false !== stripos( $software, 'Microsoft-IIS' ) ) {
+			return 20;
+		}
+
+		if ( $php_limit <= 0 || $php_limit >= 60 ) {
+			return 45;
+		}
+
+		return max( 5, min( 20, $php_limit - 5 ) );
 	}
 
 	/**
@@ -846,6 +925,9 @@ final class JMI_Queue {
 			'next_worker_due'         => 0,
 			'last_lock_contention_at' => 0,
 			'last_lock_recovery_at'   => 0,
+			'last_recovery_at'        => 0,
+			'last_recovery_reason'    => '',
+			'recovery_count'          => 0,
 		);
 
 		return is_array( $status ) ? array_merge( $base, $status ) : $base;

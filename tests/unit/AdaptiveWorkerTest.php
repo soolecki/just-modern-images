@@ -10,6 +10,7 @@ final class AdaptiveWorkerTest extends TestCase {
 		$GLOBALS['jmi_test_post_meta']  = array();
 		$GLOBALS['jmi_test_scheduled']  = array();
 		$GLOBALS['jmi_test_filters']    = array();
+		$GLOBALS['jmi_test_doing_cron'] = false;
 		$GLOBALS['jmi_test_mime_types'] = array(
 			1 => 'image/jpeg',
 			2 => 'image/jpeg',
@@ -145,6 +146,34 @@ final class AdaptiveWorkerTest extends TestCase {
 		$this->assertGreaterThan( 0, $queue->status()['last_lock_recovery_at'] );
 	}
 
+	public function test_live_cron_request_claims_a_missing_scan_event(): void {
+		global $wpdb;
+
+		$wpdb                             = new JMI_Test_Attachment_Wpdb( array( 1, 2 ) );
+		$GLOBALS['jmi_test_doing_cron'] = true;
+		$queue                            = $this->queue( new JMI_Test_Recording_Converter() );
+		update_option( JMI_Queue::STATUS_OPTION, array( 'status' => 'queued' ) );
+
+		$queue->run_due_scan_during_cron();
+
+		$status = $queue->status();
+		$this->assertSame( 'complete', $status['status'] );
+		$this->assertSame( 'missing_event_claimed', $status['last_recovery_reason'] );
+		$this->assertSame( 1, $status['recovery_count'] );
+		$this->assertSame( 2, $status['last_worker_attempts'] );
+	}
+
+	public function test_worker_budget_expands_on_servers_with_room(): void {
+		$queue  = $this->queue( new JMI_Test_Recording_Converter() );
+		$method = new ReflectionMethod( JMI_Queue::class, 'default_worker_time_budget' );
+		$method->setAccessible( true );
+
+		$this->assertSame( 45, $method->invoke( $queue, 0, 'LiteSpeed' ) );
+		$this->assertSame( 45, $method->invoke( $queue, 300, 'nginx' ) );
+		$this->assertSame( 20, $method->invoke( $queue, 30, 'nginx' ) );
+		$this->assertSame( 20, $method->invoke( $queue, 0, 'Microsoft-IIS/10.0' ) );
+	}
+
 	public function test_repeated_upgrade_does_not_reset_an_active_scan(): void {
 		$queue   = $this->queue( new JMI_Test_Recording_Converter() );
 		$profile = ( new JMI_Quality_Profiles() )->generation_profile();
@@ -173,10 +202,10 @@ final class AdaptiveWorkerTest extends TestCase {
 	}
 
 	private function reset_request_budget(): void {
-		foreach ( array( 'request_worker_started_at', 'request_worker_attempts', 'request_worker_item_time' ) as $property_name ) {
+		foreach ( array( 'request_worker_started_at', 'request_worker_attempts', 'request_worker_item_time', 'cron_recovery_ran' ) as $property_name ) {
 			$property = new ReflectionProperty( JMI_Queue::class, $property_name );
 			$property->setAccessible( true );
-			$property->setValue( null, 0 );
+			$property->setValue( null, 'cron_recovery_ran' === $property_name ? false : 0 );
 		}
 	}
 }

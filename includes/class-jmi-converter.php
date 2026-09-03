@@ -101,6 +101,7 @@ final class JMI_Converter {
 		$expected_variants          = 0;
 		$current_variants           = 0;
 		$usable_variants            = 0;
+		$format_health              = array();
 
 		foreach ( $sources as $source_key => $source ) {
 			$next['sources'][ $source_key ] = $this->source_manifest_data( $source );
@@ -132,6 +133,18 @@ final class JMI_Converter {
 					++$summary['reused'];
 				} else {
 					$variant = $this->convert_variant( $source, $mime_type, $extension, $generation_profile );
+					if ( ! isset( $format_health[ $mime_type ] ) ) {
+						$format_health[ $mime_type ] = array(
+							'succeeded'   => false,
+							'last_failure' => '',
+						);
+					}
+
+					if ( 'ready' === $variant['status'] || 'not_smaller' === ( $variant['reason'] ?? '' ) ) {
+						$format_health[ $mime_type ]['succeeded'] = true;
+					} elseif ( 'failed' === $variant['status'] ) {
+						$format_health[ $mime_type ]['last_failure'] = (string) ( $variant['reason'] ?? '' );
+					}
 				}
 
 				if ( 'ready' === $variant['status'] && ! $was_reused ) {
@@ -139,7 +152,6 @@ final class JMI_Converter {
 				} elseif ( 'failed' === $variant['status'] ) {
 					++$summary['failed'];
 					$summary['last_reason'] = $variant['reason'];
-					$this->capabilities->record_failure( $mime_type, $variant['reason'] );
 				} elseif ( 'ready' !== $variant['status'] ) {
 					++$summary['skipped'];
 					$summary['last_reason'] = $variant['reason'];
@@ -169,6 +181,15 @@ final class JMI_Converter {
 				}
 
 				$next['sources'][ $source_key ]['variants'][ $mime_type ] = $variant;
+			}
+		}
+
+		foreach ( $format_health as $mime_type => $health ) {
+			if ( $health['succeeded'] ) {
+				$this->capabilities->record_success( $mime_type );
+			} elseif ( $health['last_failure'] ) {
+				// One attachment is one health sample, regardless of thumbnail count.
+				$this->capabilities->record_failure( $mime_type, $health['last_failure'] );
 			}
 		}
 
@@ -236,12 +257,19 @@ final class JMI_Converter {
 		}
 
 		$token            = $this->variant_token( $source, $mime_type, $generation_profile );
-		$target_path      = $source['path'] . '.jmi-' . $token . '.' . $extension;
-		$relative_path    = $source['relative_path'] . '.jmi-' . $token . '.' . $extension;
+		$paths            = $this->variant_paths( $source, $token, $extension );
+		$target_path      = $paths['absolute'];
+		$relative_path    = $paths['relative'];
 		$target_directory = dirname( $target_path );
+
+		clearstatcache( true, $target_directory );
+		if ( ! is_dir( $target_directory ) || ! is_writable( $target_directory ) ) {
+			return $this->outcome( 'failed', 'storage_not_writable', $mime_type, $generation_profile );
+		}
+
 		$temp_filename    = wp_unique_filename(
 			$target_directory,
-			'.' . wp_basename( $source['path'] ) . '.jmi-' . wp_generate_password( 8, false ) . '.' . $extension
+			'.jmi-tmp-' . wp_generate_password( 8, false ) . '.' . $extension
 		);
 		$temp_path        = $target_directory . DIRECTORY_SEPARATOR . $temp_filename;
 		$saved_path       = $temp_path;
@@ -280,7 +308,7 @@ final class JMI_Converter {
 			unset( $editor );
 
 			if ( '' !== $warning ) {
-				return $this->outcome( 'failed', 'encode_warning', $mime_type, $generation_profile );
+				return $this->outcome( 'failed', $this->warning_reason( $warning ), $mime_type, $generation_profile );
 			}
 
 			if ( is_wp_error( $saved ) ) {
@@ -313,6 +341,52 @@ final class JMI_Converter {
 				wp_delete_file( $temp_path );
 			}
 		}
+	}
+
+	/**
+	 * Build short immutable filenames that remain safe on Windows and SMB.
+	 *
+	 * @param array<string, mixed> $source    Source data.
+	 * @param string               $token     Variant token.
+	 * @param string               $extension File extension.
+	 * @return array<string, string>
+	 */
+	private function variant_paths( $source, $token, $extension ) {
+		$filename           = 'jmi-' . $token . '.' . $extension;
+		$relative_directory = dirname( wp_normalize_path( $source['relative_path'] ) );
+		$relative_path      = '.' === $relative_directory ? $filename : trailingslashit( $relative_directory ) . $filename;
+
+		return array(
+			'absolute' => dirname( $source['path'] ) . DIRECTORY_SEPARATOR . $filename,
+			'relative' => $relative_path,
+		);
+	}
+
+	/**
+	 * Separate storage warnings from encoder-health failures.
+	 *
+	 * @param string $warning Captured PHP warning.
+	 * @return string
+	 */
+	private function warning_reason( $warning ) {
+		$storage_fragments = array(
+			'permission denied',
+			'failed to open stream',
+			'read-only',
+			'sharing violation',
+			'network name',
+			'path not found',
+			'no such file or directory',
+		);
+		$warning           = strtolower( (string) $warning );
+
+		foreach ( $storage_fragments as $fragment ) {
+			if ( false !== strpos( $warning, $fragment ) ) {
+				return 'storage_write_failed';
+			}
+		}
+
+		return 'encode_warning';
 	}
 
 	/**
@@ -379,52 +453,72 @@ final class JMI_Converter {
 	 * @return bool
 	 */
 	private function publish_file( $temporary_path, $target_path ) {
-		if ( file_exists( $target_path ) ) {
-			return false;
+		for ( $attempt = 0; $attempt < 3; ++$attempt ) {
+			clearstatcache( true, $target_path );
+			if ( file_exists( $target_path ) ) {
+				if ( $this->files_identical( $temporary_path, $target_path ) ) {
+					wp_delete_file( $temporary_path );
+					return true;
+				}
+
+				return false;
+			}
+
+			$warning = '';
+			$copied  = JMI_Error_Trap::run(
+				static function () use ( $temporary_path, $target_path ) {
+					return copy( $temporary_path, $target_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_copy
+				},
+				$warning
+			);
+
+			clearstatcache( true, $target_path );
+			if ( $this->files_identical( $temporary_path, $target_path ) ) {
+				wp_delete_file( $temporary_path );
+				return true;
+			}
+
+			if ( $copied ) {
+				// Only remove a file created by this request and rejected by verification.
+				wp_delete_file( $target_path );
+			}
+
+			if ( $attempt < 2 ) {
+				usleep( 20000 * ( $attempt + 1 ) );
+			}
 		}
 
-		$warning = '';
-		$copied  = JMI_Error_Trap::run(
-			static function () use ( $temporary_path, $target_path ) {
-				return copy( $temporary_path, $target_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_copy
+		return false;
+	}
+
+	/**
+	 * Verify that a published file matches its validated temporary source.
+	 *
+	 * @param string $source_path Source file.
+	 * @param string $target_path Target file.
+	 * @return bool
+	 */
+	private function files_identical( $source_path, $target_path ) {
+		$warning      = '';
+		$verification = JMI_Error_Trap::run(
+			static function () use ( $source_path, $target_path ) {
+				return array(
+					'source_size' => wp_filesize( $source_path ),
+					'target_size' => wp_filesize( $target_path ),
+					'source_hash' => hash_file( 'sha256', $source_path ),
+					'target_hash' => hash_file( 'sha256', $target_path ),
+				);
 			},
 			$warning
 		);
 
-		if ( '' !== $warning || ! $copied ) {
-			wp_delete_file( $target_path );
-			return false;
-		}
-
-		$verification_warning = '';
-		$verification         = JMI_Error_Trap::run(
-			static function () use ( $temporary_path, $target_path ) {
-				return array(
-					'source_size' => wp_filesize( $temporary_path ),
-					'target_size' => wp_filesize( $target_path ),
-					'source_hash' => hash_file( 'sha256', $temporary_path ),
-					'target_hash' => hash_file( 'sha256', $target_path ),
-				);
-			},
-			$verification_warning
-		);
-
-		if (
-			'' !== $verification_warning ||
-			! is_array( $verification ) ||
-			$verification['source_size'] < 1 ||
-			$verification['source_size'] !== $verification['target_size'] ||
-			! is_string( $verification['source_hash'] ) ||
-			! is_string( $verification['target_hash'] ) ||
-			! hash_equals( $verification['source_hash'], $verification['target_hash'] )
-		) {
-			wp_delete_file( $target_path );
-			return false;
-		}
-
-		wp_delete_file( $temporary_path );
-
-		return true;
+		return '' === $warning &&
+			is_array( $verification ) &&
+			$verification['source_size'] > 0 &&
+			$verification['source_size'] === $verification['target_size'] &&
+			is_string( $verification['source_hash'] ) &&
+			is_string( $verification['target_hash'] ) &&
+			hash_equals( $verification['source_hash'], $verification['target_hash'] );
 	}
 
 	/**

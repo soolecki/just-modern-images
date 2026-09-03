@@ -46,4 +46,31 @@ final class CapabilitiesTest extends TestCase {
 		$this->assertCount( 1, $health['profiles'] );
 		$this->assertSame( 'temporarily_disabled', $capabilities->get_all()['image/webp']['state'] );
 	}
+
+	public function test_source_and_storage_failures_do_not_trip_the_encoder_breaker(): void {
+		$capabilities = new JMI_Capabilities();
+		$capabilities->probe_all();
+
+		for ( $attempt = 0; $attempt < 10; ++$attempt ) {
+			$capabilities->record_failure( 'image/webp', 'decode_failed' );
+			$capabilities->record_failure( 'image/webp', 'storage_write_failed' );
+		}
+
+		$this->assertSame( array(), get_option( JMI_Capabilities::HEALTH_OPTION, array() ) );
+	}
+
+	public function test_all_formats_pause_returns_the_earliest_recovery_time(): void {
+		$capabilities = new JMI_Capabilities();
+		$capabilities->probe_all();
+
+		foreach ( array_keys( $capabilities->formats() ) as $mime_type ) {
+			for ( $attempt = 0; $attempt < JMI_Capabilities::FAILURE_LIMIT; ++$attempt ) {
+				$capabilities->record_failure( $mime_type, 'encode_failed' );
+			}
+		}
+
+		$this->assertGreaterThan( time(), $capabilities->all_formats_paused_until() );
+		$capabilities->record_success( 'image/webp' );
+		$this->assertSame( 0, $capabilities->all_formats_paused_until() );
+	}
 }
