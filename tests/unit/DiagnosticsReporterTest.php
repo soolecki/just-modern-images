@@ -5,6 +5,9 @@ use PHPUnit\Framework\TestCase;
 final class DiagnosticsReporterTest extends TestCase {
 
 	protected function setUp(): void {
+		$GLOBALS['jmi_test_multisite']                            = false;
+		$GLOBALS['jmi_test_blog_id']                              = 1;
+		$GLOBALS['jmi_test_network_options']                      = array();
 		$GLOBALS['jmi_test_options']                             = array();
 		$GLOBALS['jmi_test_scheduled']                           = array();
 		$GLOBALS['jmi_test_remote_requests']                     = array();
@@ -95,6 +98,45 @@ final class DiagnosticsReporterTest extends TestCase {
 		$this->assertSame( 1, $status['cron']['observations'] );
 		$this->assertGreaterThan( 0, $status['cron']['last_observed_at'] );
 		$this->assertSame( 'cron_heartbeat', get_option( JMI_Diagnostics_Reporter::OUTBOX_OPTION )[0]['type'] );
+	}
+
+	public function test_cron_heartbeat_uses_live_queue_and_format_state(): void {
+		$reporter = new JMI_Diagnostics_Reporter(
+			static function () {
+				return array(
+					'snapshot' => array(
+						'library' => array( 'total' => 100, 'ready' => 70, 'waiting' => 30 ),
+						'queue'   => array( 'status' => 'running', 'cursor' => 55 ),
+					),
+					'formats'  => array(
+						'image/webp' => array( 'state' => 'available', 'reason' => 'probe_passed' ),
+					),
+				);
+			}
+		);
+		$reporter->set_enabled( true );
+		$reporter->observe_cron();
+
+		$heartbeat = get_option( JMI_Diagnostics_Reporter::OUTBOX_OPTION )[0];
+		$this->assertSame( 100, $heartbeat['after']['library']['total'] );
+		$this->assertSame( 70, $heartbeat['after']['library']['ready'] );
+		$this->assertSame( 'running', $heartbeat['after']['queue']['status'] );
+		$this->assertSame( 'available', $heartbeat['formats']['image/webp']['state'] );
+	}
+
+	public function test_multisite_payload_contains_a_shared_network_group(): void {
+		$GLOBALS['jmi_test_multisite'] = true;
+		$reporter                      = new JMI_Diagnostics_Reporter();
+		$reporter->set_enabled( true );
+		$reporter->queue_activity( array( 'id' => 'network-event', 'type' => 'scan', 'started_at' => 100 ) );
+		$reporter->send( true );
+		$payload = json_decode( $GLOBALS['jmi_test_remote_requests'][0]['args']['body'], true );
+
+		$this->assertSame( 1, $payload['installation']['site_id'] );
+		$this->assertNotSame( '', $payload['installation']['network_group'] );
+		$this->assertArrayHasKey( 'storage', $payload['runtime'] );
+
+		$GLOBALS['jmi_test_multisite'] = false;
 	}
 
 	public function test_successful_send_includes_site_identity_and_clears_batch(): void {

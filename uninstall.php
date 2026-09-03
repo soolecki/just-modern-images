@@ -110,3 +110,7 @@ if ( is_multisite() ) {
 } else {
 	jmi_uninstall_site();
 }
+
+if ( is_multisite() ) {
+	delete_site_option( 'jmi_diagnostics_network_id' );
+}

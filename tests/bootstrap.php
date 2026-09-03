@@ -19,6 +19,14 @@ $GLOBALS['jmi_test_translation_calls'] = array();
 $GLOBALS['jmi_test_remote_requests']   = array();
 $GLOBALS['jmi_test_remote_response']   = array( 'response' => array( 'code' => 202 ) );
 $GLOBALS['jmi_test_doing_cron']        = false;
+$GLOBALS['jmi_test_multisite']         = false;
+$GLOBALS['jmi_test_blog_id']           = 1;
+$GLOBALS['jmi_test_blog_stack']        = array();
+$GLOBALS['jmi_test_site_options']      = array();
+$GLOBALS['jmi_test_site_scheduled']    = array();
+$GLOBALS['jmi_test_network_options']   = array();
+$GLOBALS['jmi_test_site_ids']          = array( 1 );
+$GLOBALS['jmi_test_network_active']    = false;
 
 function __( $text, $domain = 'default' ) {
 	$GLOBALS['jmi_test_translation_calls'][] = $domain;
@@ -29,12 +37,47 @@ function sanitize_key( $key ) {
 	return preg_replace( '/[^a-z0-9_\-]/', '', strtolower( (string) $key ) );
 }
 
+function sanitize_text_field( $value ) {
+	return trim( strip_tags( (string) $value ) );
+}
+
+function wp_unslash( $value ) {
+	return stripslashes( (string) $value );
+}
+
 function wp_strip_all_tags( $text ) {
 	return strip_tags( (string) $text );
 }
 
 function get_option( $name, $default = false ) {
-	return $GLOBALS['jmi_test_options'][ $name ] ?? $default;
+	$options = jmi_test_current_options();
+	return $options[ $name ] ?? $default;
+}
+
+function &jmi_test_current_options() {
+	$blog_id = (int) ( $GLOBALS['jmi_test_blog_id'] ?? 1 );
+	if ( 1 === $blog_id ) {
+		return $GLOBALS['jmi_test_options'];
+	}
+
+	if ( ! isset( $GLOBALS['jmi_test_site_options'][ $blog_id ] ) ) {
+		$GLOBALS['jmi_test_site_options'][ $blog_id ] = array();
+	}
+
+	return $GLOBALS['jmi_test_site_options'][ $blog_id ];
+}
+
+function &jmi_test_current_schedule() {
+	$blog_id = (int) ( $GLOBALS['jmi_test_blog_id'] ?? 1 );
+	if ( 1 === $blog_id ) {
+		return $GLOBALS['jmi_test_scheduled'];
+	}
+
+	if ( ! isset( $GLOBALS['jmi_test_site_scheduled'][ $blog_id ] ) ) {
+		$GLOBALS['jmi_test_site_scheduled'][ $blog_id ] = array();
+	}
+
+	return $GLOBALS['jmi_test_site_scheduled'][ $blog_id ];
 }
 
 function get_post_meta( $attachment_id, $key, $single = false ) {
@@ -85,23 +128,26 @@ function apply_filters( $hook, $value, ...$args ) {
 }
 
 function add_option( $name, $value ) {
-	if ( array_key_exists( $name, $GLOBALS['jmi_test_options'] ) ) {
+	$options =& jmi_test_current_options();
+	if ( array_key_exists( $name, $options ) ) {
 		return false;
 	}
 
-	$GLOBALS['jmi_test_options'][ $name ] = $value;
+	$options[ $name ] = $value;
 
 	return true;
 }
 
 function update_option( $name, $value ) {
-	$GLOBALS['jmi_test_options'][ $name ] = $value;
+	$options =& jmi_test_current_options();
+	$options[ $name ] = $value;
 
 	return true;
 }
 
 function delete_option( $name ) {
-	unset( $GLOBALS['jmi_test_options'][ $name ] );
+	$options =& jmi_test_current_options();
+	unset( $options[ $name ] );
 
 	return true;
 }
@@ -119,7 +165,67 @@ function home_url( $path = '' ) {
 }
 
 function is_multisite() {
-	return false;
+	return ! empty( $GLOBALS['jmi_test_multisite'] );
+}
+
+function get_current_blog_id() {
+	return (int) ( $GLOBALS['jmi_test_blog_id'] ?? 1 );
+}
+
+function get_current_network_id() {
+	return 1;
+}
+
+function get_main_site_id() {
+	return 1;
+}
+
+function get_sites( $args = array() ) {
+	$offset = max( 0, (int) ( $args['offset'] ?? 0 ) );
+	$number = max( 1, (int) ( $args['number'] ?? 100 ) );
+
+	return array_slice( $GLOBALS['jmi_test_site_ids'], $offset, $number );
+}
+
+function switch_to_blog( $blog_id ) {
+	$GLOBALS['jmi_test_blog_stack'][] = (int) $GLOBALS['jmi_test_blog_id'];
+	$GLOBALS['jmi_test_blog_id']      = (int) $blog_id;
+	return true;
+}
+
+function restore_current_blog() {
+	if ( empty( $GLOBALS['jmi_test_blog_stack'] ) ) {
+		return false;
+	}
+
+	$GLOBALS['jmi_test_blog_id'] = array_pop( $GLOBALS['jmi_test_blog_stack'] );
+	return true;
+}
+
+function get_site_option( $name, $default = false ) {
+	return $GLOBALS['jmi_test_network_options'][ $name ] ?? $default;
+}
+
+function add_site_option( $name, $value ) {
+	if ( array_key_exists( $name, $GLOBALS['jmi_test_network_options'] ) ) {
+		return false;
+	}
+
+	$GLOBALS['jmi_test_network_options'][ $name ] = $value;
+	return true;
+}
+
+function delete_site_option( $name ) {
+	unset( $GLOBALS['jmi_test_network_options'][ $name ] );
+	return true;
+}
+
+function plugin_basename( $file ) {
+	return basename( dirname( $file ) ) . '/' . basename( $file );
+}
+
+function is_plugin_active_for_network() {
+	return ! empty( $GLOBALS['jmi_test_network_active'] );
 }
 
 function wp_generate_uuid4() {
@@ -166,7 +272,8 @@ function get_post_mime_type( $attachment_id ) {
 }
 
 function wp_next_scheduled( $hook, $args = array() ) {
-	foreach ( $GLOBALS['jmi_test_scheduled'] as $event ) {
+	$schedule = jmi_test_current_schedule();
+	foreach ( $schedule as $event ) {
 		if ( $hook === $event['hook'] && $args === $event['args'] ) {
 			return $event['timestamp'];
 		}
@@ -176,7 +283,8 @@ function wp_next_scheduled( $hook, $args = array() ) {
 }
 
 function wp_schedule_single_event( $timestamp, $hook, $args = array() ) {
-	$GLOBALS['jmi_test_scheduled'][] = array(
+	$schedule   =& jmi_test_current_schedule();
+	$schedule[] = array(
 		'timestamp' => $timestamp,
 		'hook'      => $hook,
 		'args'      => $args,
@@ -186,10 +294,11 @@ function wp_schedule_single_event( $timestamp, $hook, $args = array() ) {
 }
 
 function wp_unschedule_event( $timestamp, $hook, $args = array() ) {
-	foreach ( $GLOBALS['jmi_test_scheduled'] as $index => $event ) {
+	$schedule =& jmi_test_current_schedule();
+	foreach ( $schedule as $index => $event ) {
 		if ( $timestamp === $event['timestamp'] && $hook === $event['hook'] && $args === $event['args'] ) {
-			unset( $GLOBALS['jmi_test_scheduled'][ $index ] );
-			$GLOBALS['jmi_test_scheduled'] = array_values( $GLOBALS['jmi_test_scheduled'] );
+			unset( $schedule[ $index ] );
+			$schedule = array_values( $schedule );
 			return true;
 		}
 	}
@@ -198,9 +307,10 @@ function wp_unschedule_event( $timestamp, $hook, $args = array() ) {
 }
 
 function wp_clear_scheduled_hook( $hook ) {
-	$GLOBALS['jmi_test_scheduled'] = array_values(
+	$schedule  =& jmi_test_current_schedule();
+	$schedule = array_values(
 		array_filter(
-			$GLOBALS['jmi_test_scheduled'],
+			$schedule,
 			static function ( $event ) use ( $hook ) {
 				return $hook !== $event['hook'];
 			}
@@ -258,7 +368,8 @@ function wp_normalize_path( $path ) {
 	return str_replace( '\\', '/', $path );
 }
 
-function wp_upload_dir() {
+function wp_upload_dir( $time = null, $create_dir = true ) {
+	unset( $time, $create_dir );
 	return array(
 		'baseurl' => 'https://example.test/wp-content/uploads',
 		'basedir' => sys_get_temp_dir(),
@@ -344,6 +455,7 @@ require_once dirname( __DIR__ ) . '/includes/class-jmi-activity-log.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-diagnostics-reporter.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-manifest.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-media-status.php';
+require_once dirname( __DIR__ ) . '/includes/class-jmi-source-inventory.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-converter.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-queue.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-renderer.php';

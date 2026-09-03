@@ -21,7 +21,7 @@ unset( $jmi_activity_log_file );
 final class JMI_Plugin {
 
 	const DATA_REVISION_OPTION = 'jmi_data_revision';
-	const DATA_REVISION        = 1;
+	const DATA_REVISION        = 2;
 	const LEGACY_VERSION       = '0.11.3';
 
 	/**
@@ -72,12 +72,22 @@ final class JMI_Plugin {
 		$profiles           = new JMI_Quality_Profiles();
 		$capabilities       = new JMI_Capabilities();
 		$activity_log       = class_exists( 'JMI_Activity_Log', false ) ? new JMI_Activity_Log() : null;
-		$reporter           = class_exists( 'JMI_Diagnostics_Reporter', false ) ? new JMI_Diagnostics_Reporter() : null;
 		$this->manifest     = new JMI_Manifest();
 		$this->media_status = new JMI_Media_Status();
 		$inventory          = new JMI_Source_Inventory();
 		$converter          = new JMI_Converter( $profiles, $capabilities, $inventory, $this->manifest );
 		$this->queue        = new JMI_Queue( $converter, $profiles, $this->media_status, $capabilities, $activity_log );
+		$reporter           = class_exists( 'JMI_Diagnostics_Reporter', false )
+			? new JMI_Diagnostics_Reporter(
+				function () use ( $capabilities ) {
+					$environment = $capabilities->diagnostic_summary();
+					return array(
+						'snapshot' => $this->queue->diagnostic_snapshot(),
+						'formats'  => $environment['formats'] ?? array(),
+					);
+				}
+			)
+			: null;
 		$renderer           = new JMI_Renderer( $this->manifest, $this->queue );
 		$settings           = new JMI_Settings( $profiles, $capabilities, $this->queue, $this->media_status, $activity_log, $reporter );
 		$media_admin        = new JMI_Media_Admin( $this->media_status, $this->manifest, $this->queue, $profiles, $capabilities );
@@ -96,6 +106,7 @@ final class JMI_Plugin {
 		}
 
 		add_action( 'delete_attachment', array( $this, 'delete_attachment_variants' ), 10, 1 );
+		add_action( 'wp_initialize_site', array( __CLASS__, 'initialize_site' ), 200, 1 );
 	}
 
 	/**
@@ -118,15 +129,37 @@ final class JMI_Plugin {
 	/**
 	 * Prepare capability data and queue existing media after activation.
 	 *
+	 * @param bool $network_wide Whether the plugin was activated for the network.
 	 * @return void
 	 */
-	public static function activate() {
+	public static function activate( $network_wide = false ) {
+		if ( $network_wide && is_multisite() ) {
+			self::for_each_site(
+				static function () {
+					self::activate_site( false );
+				}
+			);
+			return;
+		}
+
+		self::activate_site( true );
+	}
+
+	/**
+	 * Initialize one site's isolated options and queue.
+	 *
+	 * @param bool $probe Whether to run the capability probe immediately.
+	 * @return void
+	 */
+	private static function activate_site( $probe ) {
 		if ( false === get_option( JMI_Quality_Profiles::OPTION_NAME, false ) ) {
 			add_option( JMI_Quality_Profiles::OPTION_NAME, JMI_Quality_Profiles::DEFAULT_PROFILE, '', false );
 		}
 
 		$capabilities = new JMI_Capabilities();
-		$capabilities->probe_all();
+		if ( $probe ) {
+			$capabilities->probe_all();
+		}
 
 		$profiles = new JMI_Quality_Profiles();
 		$manifest = new JMI_Manifest();
@@ -165,10 +198,94 @@ final class JMI_Plugin {
 	/**
 	 * Stop background work. Generated files remain harmless companions.
 	 *
+	 * @param bool $network_wide Whether the plugin was deactivated for the network.
 	 * @return void
 	 */
-	public static function deactivate() {
+	public static function deactivate( $network_wide = false ) {
+		if ( $network_wide && is_multisite() ) {
+			self::for_each_site( array( __CLASS__, 'deactivate_site' ) );
+			return;
+		}
+
+		self::deactivate_site();
+	}
+
+	/**
+	 * Initialize a newly created site when the plugin is network active.
+	 *
+	 * @param WP_Site|mixed $new_site New site object.
+	 * @return void
+	 */
+	public static function initialize_site( $new_site ) {
+		if ( ! is_multisite() || ! self::is_network_active() || ! is_object( $new_site ) || empty( $new_site->blog_id ) ) {
+			return;
+		}
+
+		switch_to_blog( (int) $new_site->blog_id );
+		try {
+			self::activate_site( false );
+		} finally {
+			restore_current_blog();
+		}
+	}
+
+	/**
+	 * Stop work for the current site.
+	 *
+	 * @return void
+	 */
+	public static function deactivate_site() {
 		JMI_Queue::unschedule();
+		if ( class_exists( 'JMI_Diagnostics_Reporter', false ) ) {
+			JMI_Diagnostics_Reporter::unschedule();
+		}
+	}
+
+	/**
+	 * Run a callback in every site's option and media context.
+	 *
+	 * @param callable $callback Site callback.
+	 * @return void
+	 */
+	private static function for_each_site( $callback ) {
+		$offset = 0;
+		do {
+			$site_ids = get_sites(
+				array(
+					'fields' => 'ids',
+					'number' => 100,
+					'offset' => $offset,
+				)
+			);
+
+			foreach ( $site_ids as $site_id ) {
+				switch_to_blog( (int) $site_id );
+				try {
+					call_user_func( $callback );
+				} finally {
+					restore_current_blog();
+				}
+			}
+
+			$count   = count( $site_ids );
+			$offset += $count;
+		} while ( 100 === $count );
+	}
+
+	/**
+	 * Determine whether this plugin is active for the whole network.
+	 *
+	 * @return bool
+	 */
+	private static function is_network_active() {
+		if ( ! function_exists( 'is_plugin_active_for_network' ) ) {
+			$file = ABSPATH . 'wp-admin/includes/plugin.php';
+			if ( is_readable( $file ) ) {
+				require_once $file;
+			}
+		}
+
+		return function_exists( 'is_plugin_active_for_network' ) && is_plugin_active_for_network( plugin_basename( JMI_PLUGIN_FILE ) );
 	}
 
 	/**

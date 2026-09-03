@@ -14,23 +14,40 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class JMI_Diagnostics_Reporter {
 
-	const SEND_HOOK           = 'jmi_send_diagnostics';
-	const ENABLED_OPTION      = 'jmi_diagnostics_enabled';
-	const OUTBOX_OPTION       = 'jmi_diagnostics_outbox';
-	const STATE_OPTION        = 'jmi_diagnostics_state';
-	const CRON_OPTION         = 'jmi_diagnostics_cron_metrics';
-	const INSTALLATION_OPTION = 'jmi_diagnostics_installation_id';
-	const INSTALLATION_SECRET = 'jmi_diagnostics_installation_secret';
-	const INITIALIZED_OPTION  = 'jmi_diagnostics_initialized';
-	const LOCK_OPTION         = 'jmi_diagnostics_send_lock';
-	const DEFAULT_ENDPOINT    = '';
-	const DEFAULT_FLEET_KEY   = '';
-	const SCHEMA              = 1;
-	const MAX_OUTBOX          = 200;
-	const BATCH_SIZE          = 20;
-	const LOCK_TTL            = 120;
-	const HEARTBEAT_INTERVAL  = 3600;
-	const MAX_CRON_SAMPLES    = 30;
+	const SEND_HOOK            = 'jmi_send_diagnostics';
+	const ENABLED_OPTION       = 'jmi_diagnostics_enabled';
+	const OUTBOX_OPTION        = 'jmi_diagnostics_outbox';
+	const STATE_OPTION         = 'jmi_diagnostics_state';
+	const CRON_OPTION          = 'jmi_diagnostics_cron_metrics';
+	const INSTALLATION_OPTION  = 'jmi_diagnostics_installation_id';
+	const INSTALLATION_SECRET  = 'jmi_diagnostics_installation_secret';
+	const NETWORK_INSTALLATION = 'jmi_diagnostics_network_id';
+	const INITIALIZED_OPTION   = 'jmi_diagnostics_initialized';
+	const LOCK_OPTION          = 'jmi_diagnostics_send_lock';
+	const DEFAULT_ENDPOINT     = '';
+	const DEFAULT_FLEET_KEY    = '';
+	const SCHEMA               = 1;
+	const MAX_OUTBOX           = 200;
+	const BATCH_SIZE           = 20;
+	const LOCK_TTL             = 120;
+	const HEARTBEAT_INTERVAL   = 3600;
+	const MAX_CRON_SAMPLES     = 30;
+
+	/**
+	 * Provides live queue, library, and format state for heartbeats.
+	 *
+	 * @var callable|null
+	 */
+	private $context_provider;
+
+	/**
+	 * Set up live diagnostic context.
+	 *
+	 * @param callable|null $context_provider Live diagnostic context provider.
+	 */
+	public function __construct( $context_provider = null ) {
+		$this->context_provider = is_callable( $context_provider ) ? $context_provider : null;
+	}
 
 	/**
 	 * Register reporting hooks.
@@ -126,6 +143,7 @@ final class JMI_Diagnostics_Reporter {
 		$last_heartbeat               = max( 0, (int) ( $metrics['last_heartbeat_at'] ?? 0 ) );
 
 		if ( 0 === $last_heartbeat || $last_heartbeat <= $now - self::HEARTBEAT_INTERVAL ) {
+			$context                      = $this->live_context();
 			$metrics['last_heartbeat_at'] = $now;
 			update_option( self::CRON_OPTION, $metrics, false );
 			$this->append_event(
@@ -142,9 +160,9 @@ final class JMI_Diagnostics_Reporter {
 					'complete'       => true,
 					'attempts'       => 0,
 					'processed'      => 0,
-					'before'         => $this->snapshot( array() ),
-					'after'          => $this->snapshot( array() ),
-					'formats'        => $this->formats( array() ),
+					'before'         => $this->snapshot( $context['snapshot'] ),
+					'after'          => $this->snapshot( $context['snapshot'] ),
+					'formats'        => $this->formats( $context['formats'] ),
 				)
 			);
 			return;
@@ -476,20 +494,27 @@ final class JMI_Diagnostics_Reporter {
 			'batch_id'     => substr( hash( 'sha256', $installation_id . '|' . implode( '|', $event_ids ) ), 0, 24 ),
 			'sent_at'      => time(),
 			'installation' => array(
-				'id'        => $installation_id,
-				'site_name' => $this->site_name(),
-				'site_url'  => $this->site_url(),
+				'id'            => $installation_id,
+				'site_name'     => $this->site_name(),
+				'site_url'      => $this->site_url(),
+				'site_id'       => function_exists( 'get_current_blog_id' ) ? max( 0, (int) get_current_blog_id() ) : 0,
+				'network_id'    => function_exists( 'get_current_network_id' ) ? max( 0, (int) get_current_network_id() ) : 0,
+				'main_site_id'  => function_exists( 'get_main_site_id' ) ? max( 0, (int) get_main_site_id() ) : 0,
+				'network_group' => $this->network_installation_id(),
 			),
 			'runtime'      => array(
 				'plugin'          => defined( 'JMI_VERSION' ) ? $this->version( JMI_VERSION ) : '',
 				'wordpress'       => $this->version( get_bloginfo( 'version' ) ),
 				'php'             => $this->version( PHP_VERSION ),
 				'php_sapi'        => $this->token( PHP_SAPI ),
+				'os_family'       => $this->token( defined( 'PHP_OS_FAMILY' ) ? PHP_OS_FAMILY : PHP_OS ),
+				'server_software' => $this->token( isset( $_SERVER['SERVER_SOFTWARE'] ) ? sanitize_text_field( wp_unslash( $_SERVER['SERVER_SOFTWARE'] ) ) : '' ),
 				'memory_limit'    => substr( preg_replace( '/[^0-9KMGkmg-]/', '', (string) ini_get( 'memory_limit' ) ), 0, 12 ),
 				'execution_limit' => max( 0, (int) ini_get( 'max_execution_time' ) ),
 				'multisite'       => function_exists( 'is_multisite' ) && is_multisite(),
 				'gd'              => extension_loaded( 'gd' ),
 				'imagick'         => extension_loaded( 'imagick' ),
+				'storage'         => $this->storage_summary(),
 				'cron'            => $this->cron_metrics(),
 			),
 			'events'       => $events,
@@ -638,6 +663,78 @@ final class JMI_Diagnostics_Reporter {
 		add_option( self::INSTALLATION_OPTION, $stored, '', false );
 
 		return $this->token( get_option( self::INSTALLATION_OPTION, $stored ) );
+	}
+
+	/**
+	 * Return one shared identifier for sites belonging to the same network.
+	 *
+	 * @return string Empty on a single-site installation.
+	 */
+	private function network_installation_id() {
+		if ( ! function_exists( 'is_multisite' ) || ! is_multisite() || ! function_exists( 'get_site_option' ) ) {
+			return '';
+		}
+
+		$stored = $this->token( get_site_option( self::NETWORK_INSTALLATION, '' ) );
+		if ( '' !== $stored ) {
+			return $stored;
+		}
+
+		$stored = $this->token( wp_generate_uuid4() );
+		if ( function_exists( 'add_site_option' ) ) {
+			add_site_option( self::NETWORK_INSTALLATION, $stored );
+		}
+
+		return $this->token( get_site_option( self::NETWORK_INSTALLATION, $stored ) );
+	}
+
+	/**
+	 * Describe uploads storage without exposing a local path.
+	 *
+	 * @return array<string, bool|string>
+	 */
+	private function storage_summary() {
+		$uploads = wp_upload_dir( null, false );
+		$basedir = wp_normalize_path( (string) ( $uploads['basedir'] ?? '' ) );
+
+		return array(
+			'type'     => 0 === strpos( $basedir, '//' ) ? 'network_share' : 'local_or_mapped',
+			'writable' => '' !== $basedir && is_dir( $basedir ) && is_writable( $basedir ), // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable
+			'error'    => ! empty( $uploads['error'] ),
+		);
+	}
+
+	/**
+	 * Read live data for an hourly heartbeat without risking plugin work.
+	 *
+	 * @return array<string, array<string, mixed>>
+	 */
+	private function live_context() {
+		$empty = array(
+			'snapshot' => array(),
+			'formats'  => array(),
+		);
+
+		if ( ! $this->context_provider ) {
+			return $empty;
+		}
+
+		try {
+			$context = call_user_func( $this->context_provider );
+			return is_array( $context ) ? array_merge( $empty, $context ) : $empty;
+		} catch ( Throwable $error ) {
+			return $empty;
+		}
+	}
+
+	/**
+	 * Remove only scheduled reporting work and its transient lock.
+	 *
+	 * @return void
+	 */
+	public static function unschedule() {
+		wp_clear_scheduled_hook( self::SEND_HOOK );
+		delete_option( self::LOCK_OPTION );
 	}
 
 	/**

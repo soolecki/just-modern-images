@@ -653,7 +653,7 @@ final class JMI_Queue {
 	 */
 	private function worker_time_budget( $started_at ) {
 		$php_limit  = (int) ini_get( 'max_execution_time' );
-		$software   = isset( $_SERVER['SERVER_SOFTWARE'] ) ? (string) $_SERVER['SERVER_SOFTWARE'] : '';
+		$software   = isset( $_SERVER['SERVER_SOFTWARE'] ) ? sanitize_text_field( wp_unslash( $_SERVER['SERVER_SOFTWARE'] ) ) : '';
 		$default    = $this->default_worker_time_budget( $php_limit, $software );
 		$configured = min( 45, max( 5, (int) apply_filters( 'jmi_worker_time_budget', $default ) ) );
 
@@ -865,6 +865,15 @@ final class JMI_Queue {
 			'lock_state' => $lock_state,
 			'lock_age'   => $locked_at ? max( 0, $now - $locked_at ) : 0,
 		);
+	}
+
+	/**
+	 * Return a current, privacy-safe queue and library snapshot.
+	 *
+	 * @return array<string, mixed>
+	 */
+	public function diagnostic_snapshot() {
+		return $this->safe_activity_snapshot();
 	}
 
 	/**

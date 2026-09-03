@@ -135,7 +135,7 @@ final class JMI_Converter {
 					$variant = $this->convert_variant( $source, $mime_type, $extension, $generation_profile );
 					if ( ! isset( $format_health[ $mime_type ] ) ) {
 						$format_health[ $mime_type ] = array(
-							'succeeded'   => false,
+							'succeeded'    => false,
 							'last_failure' => '',
 						);
 					}
@@ -263,16 +263,16 @@ final class JMI_Converter {
 		$target_directory = dirname( $target_path );
 
 		clearstatcache( true, $target_directory );
-		if ( ! is_dir( $target_directory ) || ! is_writable( $target_directory ) ) {
+		if ( ! is_dir( $target_directory ) || ! is_writable( $target_directory ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable
 			return $this->outcome( 'failed', 'storage_not_writable', $mime_type, $generation_profile );
 		}
 
-		$temp_filename    = wp_unique_filename(
+		$temp_filename = wp_unique_filename(
 			$target_directory,
 			'.jmi-tmp-' . wp_generate_password( 8, false ) . '.' . $extension
 		);
-		$temp_path        = $target_directory . DIRECTORY_SEPARATOR . $temp_filename;
-		$saved_path       = $temp_path;
+		$temp_path     = $target_directory . DIRECTORY_SEPARATOR . $temp_filename;
+		$saved_path    = $temp_path;
 
 		if ( file_exists( $target_path ) ) {
 			$existing = $this->validate_output( $target_path, $mime_type, $source );
