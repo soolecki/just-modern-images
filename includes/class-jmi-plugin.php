@@ -9,6 +9,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+$jmi_activity_log_file = __DIR__ . '/class-jmi-activity-log.php';
+if ( ! class_exists( 'JMI_Activity_Log', false ) && is_readable( $jmi_activity_log_file ) ) {
+	require_once $jmi_activity_log_file;
+}
+unset( $jmi_activity_log_file );
+
 /**
  * Wires plugin services to WordPress.
  */
@@ -65,13 +71,14 @@ final class JMI_Plugin {
 	private function __construct() {
 		$profiles           = new JMI_Quality_Profiles();
 		$capabilities       = new JMI_Capabilities();
+		$activity_log       = class_exists( 'JMI_Activity_Log', false ) ? new JMI_Activity_Log() : null;
 		$this->manifest     = new JMI_Manifest();
 		$this->media_status = new JMI_Media_Status();
 		$inventory          = new JMI_Source_Inventory();
 		$converter          = new JMI_Converter( $profiles, $capabilities, $inventory, $this->manifest );
-		$this->queue        = new JMI_Queue( $converter, $profiles, $this->media_status );
+		$this->queue        = new JMI_Queue( $converter, $profiles, $this->media_status, $capabilities, $activity_log );
 		$renderer           = new JMI_Renderer( $this->manifest, $this->queue );
-		$settings           = new JMI_Settings( $profiles, $capabilities, $this->queue, $this->media_status );
+		$settings           = new JMI_Settings( $profiles, $capabilities, $this->queue, $this->media_status, $activity_log );
 		$media_admin        = new JMI_Media_Admin( $this->media_status, $this->manifest, $this->queue, $profiles, $capabilities );
 
 		$this->queue->register();
@@ -122,7 +129,9 @@ final class JMI_Plugin {
 		$queue    = new JMI_Queue(
 			new JMI_Converter( $profiles, $capabilities, new JMI_Source_Inventory(), $manifest ),
 			$profiles,
-			$status
+			$status,
+			$capabilities,
+			class_exists( 'JMI_Activity_Log', false ) ? new JMI_Activity_Log() : null
 		);
 		$queue->start_scan( 'activation' );
 

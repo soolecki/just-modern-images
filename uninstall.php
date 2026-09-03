@@ -46,6 +46,7 @@ function jmi_uninstall_site() {
 	foreach (
 		array(
 			'jmi_capabilities',
+			'jmi_activity_log',
 			'jmi_data_revision',
 			'jmi_format_health',
 			'jmi_quality_profile',

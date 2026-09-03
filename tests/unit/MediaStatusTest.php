@@ -87,4 +87,24 @@ final class MediaStatusTest extends TestCase {
 		$this->assertSame( 2, $second['failure_count'] );
 		$this->assertGreaterThan( $first_retry, $second['retry_after'] );
 	}
+
+	public function test_queue_state_remembers_why_a_settled_image_was_reopened(): void {
+		$status = new JMI_Media_Status();
+		$status->record_result(
+			14,
+			'v1:standard',
+			array(
+				'state'       => 'ready',
+				'failed'      => 0,
+				'last_reason' => '',
+			)
+		);
+
+		$status->mark_queued( 14, 'demand', 'v1:standard' );
+		$status->mark_processing( 14, 'demand', 'v1:standard' );
+		$processing = $status->get( 14, 'v1:standard' );
+
+		$this->assertSame( 'ready', $processing['queued_from'] );
+		$this->assertSame( 'demand', $processing['queue_source'] );
+	}
 }

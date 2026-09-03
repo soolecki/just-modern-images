@@ -38,6 +38,8 @@ final class JMI_Media_Status {
 			'failure_count' => 0,
 			'priority'      => '',
 			'profile'       => '',
+			'queued_from'   => '',
+			'queue_source'  => '',
 		);
 
 		if ( ! is_array( $details ) ) {
@@ -68,6 +70,10 @@ final class JMI_Media_Status {
 		$previous      = $this->get( $attachment_id, $generation_profile );
 		$same_profile  = $previous['profile'] === $generation_profile;
 		$failure_count = $same_profile ? (int) $previous['failure_count'] : 0;
+		$queued_from   = in_array( $previous['state'], array( 'queued', 'processing' ), true )
+			? sanitize_key( $previous['queued_from'] ?? '' )
+			: sanitize_key( $previous['state'] );
+		$queue_source  = sanitize_key( $priority );
 		$this->write(
 			$attachment_id,
 			'queued',
@@ -79,6 +85,8 @@ final class JMI_Media_Status {
 				'failure_count' => $failure_count,
 				'retry_after'   => 0,
 				'profile'       => $generation_profile,
+				'queued_from'   => $queued_from,
+				'queue_source'  => $queue_source,
 			)
 		);
 	}
@@ -104,6 +112,8 @@ final class JMI_Media_Status {
 				'failure_count' => (int) $previous['failure_count'],
 				'retry_after'   => 0,
 				'profile'       => $generation_profile,
+				'queued_from'   => sanitize_key( $previous['queued_from'] ?? '' ),
+				'queue_source'  => sanitize_key( $previous['queue_source'] ?? $priority ),
 			)
 		);
 	}
@@ -143,6 +153,8 @@ final class JMI_Media_Status {
 				'failure_count' => $failure_count,
 				'priority'      => '',
 				'profile'       => $generation_profile,
+				'queued_from'   => '',
+				'queue_source'  => '',
 			)
 		);
 	}

@@ -3,7 +3,7 @@ Tags: webp, avif, images, performance, optimization
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.11.4
+Stable tag: 0.11.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -29,7 +29,7 @@ The only preference is image quality: Economy, Standard, High, or Ultra. Server 
 
 The settings screen shows separate library-review and ready-image progress. Media Library rows and attachment details show whether an image is ready, queued, partially available, or needs attention. Administrators can move individual images or a bulk selection to the front of the queue.
 
-When an image needs attention, the settings screen and Media Library show a plain-language explanation together with a stable diagnostic code. A server check can also be run directly from the settings screen.
+When an image needs attention, the settings screen and Media Library show a plain-language explanation together with a stable diagnostic code. A server check can also be run directly from the settings screen. The Activity log keeps the latest 50 processing events with before-and-after library counts, server identifiers, stop reasons, and per-image results. Administrators can download the same privacy-safe history as JSON for troubleshooting.
 
 = Designed to fail safely =
 
@@ -98,6 +98,15 @@ The plugin uses normal WordPress upload URLs and provides a filter for CDN integ
 Not in this release. The first release intentionally covers attachment images rendered through standard WordPress APIs without buffering or rewriting the entire page.
 
 == Changelog ==
+
+= 0.11.5 =
+
+* Prevented delayed attachment events from moving an already settled image back to the waiting state.
+* Preserved the last settled state and queue source while an image is intentionally reprocessed.
+* Added a bounded Activity log with before-and-after library and queue snapshots for the latest 50 processing events.
+* Added per-image state transitions, processing results, server identifiers, format capability states, and worker stop reasons to the history.
+* Added a privacy-safe JSON diagnostic report that administrators can download from the Activity log.
+* Kept diagnostic collection isolated so a logging problem cannot interrupt image processing or retain a worker lock.
 
 = 0.11.4 =
 

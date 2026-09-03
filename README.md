@@ -25,8 +25,10 @@ Version 0.11.3 adds request-wide adaptive cron budgets and one shared worker loc
 for overlapping clustered cron calls. Version 0.11.4 makes the queue
 self-healing after interrupted single events and replaces release-number
 migrations with a monotonic data revision that remains stable during rolling
-OPcache refreshes. The project is still in pre-release development and needs
-broader integration testing before a public WordPress.org release.
+OPcache refreshes. Version 0.11.5 prevents delayed events from reopening settled
+images and adds a bounded, privacy-safe history of worker runs with before and
+after state. The project is still in pre-release development and needs broader
+integration testing before a public WordPress.org release.
 
 ## Development
 

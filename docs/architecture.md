@@ -155,6 +155,12 @@ Missing events, events overdue by more than five minutes, and abandoned worker
 locks are restored automatically. Scheduling failures and the current event,
 lock, and worker-code state remain visible to administrators.
 
+A delayed single-image event checks the attachment state both before and after
+acquiring the shared worker lock. If another worker has already settled that
+image, the old event exits without reopening it. When lock contention requires
+a retry, rescheduling preserves the current attachment state instead of marking
+it as newly queued.
+
 Data migrations use a monotonic integer revision rather than the release
 version. An older application server therefore never downgrades shared state or
 restarts a scan merely because its OPcache has not refreshed yet. The legacy
@@ -211,7 +217,15 @@ The same screen can show operational information without adding configuration:
 - ready, partial, waiting, stale, and failed attachment counts;
 - plain-language failure details with stable diagnostic codes;
 - latest queue activity;
+- the latest 50 processing events with before-and-after library counts, queue
+  cursor, server identifier, capability state, and per-image transitions;
+- a downloadable JSON diagnostic report containing the same privacy-safe data;
 - a resumable library scan action.
+
+The bounded activity history stores attachment IDs and operational state only.
+It does not retain file paths, upload URLs, frontend page URLs, visitor details,
+or analytics data. Diagnostic capture is isolated from the worker so a failed
+history write cannot interrupt conversion or retain the shared worker lock.
 
 The Media Library list has a compact status column, status filters, a signed
 single-image priority action, and a bulk priority action. Attachment details

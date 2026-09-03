@@ -30,6 +30,10 @@
 	font-size: 12px;
 }
 
+.jmi-tabs {
+	margin: -6px 0 24px;
+}
+
 .jmi-overview,
 .jmi-panel,
 .jmi-stat {
@@ -193,6 +197,140 @@
 .jmi-panel h2 {
 	margin: 0 0 20px;
 	font-size: 17px;
+}
+
+.jmi-panel-heading {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 24px;
+	margin-bottom: 20px;
+}
+
+.jmi-panel-heading h2 {
+	margin-bottom: 6px;
+}
+
+.jmi-panel-heading p,
+.jmi-empty-state p {
+	margin: 0;
+	color: #646970;
+}
+
+.jmi-panel-heading form,
+.jmi-panel-heading .submit {
+	margin: 0;
+	padding: 0;
+}
+
+.jmi-history-panel {
+	padding: 24px;
+}
+
+.jmi-empty-state {
+	padding: 34px;
+	border: 1px dashed #c3c4c7;
+	border-radius: 10px;
+	background: #f9f9fa;
+	text-align: center;
+}
+
+.jmi-empty-state strong {
+	display: block;
+	margin-bottom: 5px;
+	font-size: 15px;
+}
+
+.jmi-run-list {
+	display: grid;
+	gap: 12px;
+}
+
+.jmi-run {
+	overflow: hidden;
+	border: 1px solid #dcdcde;
+	border-radius: 10px;
+	background: #fff;
+}
+
+.jmi-run--regression {
+	border-left: 4px solid #d63638;
+}
+
+.jmi-run summary {
+	display: grid;
+	grid-template-columns: 1.2fr 0.7fr 1.5fr 1.3fr;
+	align-items: center;
+	gap: 14px;
+	padding: 15px 18px;
+	cursor: pointer;
+	font-weight: 600;
+	list-style-position: inside;
+}
+
+.jmi-run[open] summary {
+	border-bottom: 1px solid #dcdcde;
+	background: #f6f7f7;
+}
+
+.jmi-run-server code {
+	font-size: 11px;
+}
+
+.jmi-run-result {
+	color: #50575e;
+	font-weight: 400;
+}
+
+.jmi-run-body {
+	padding: 18px;
+}
+
+.jmi-run-metrics {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 1px;
+	margin-bottom: 14px;
+	background: #dcdcde;
+}
+
+.jmi-run-metrics > div {
+	display: flex;
+	flex-direction: column;
+	gap: 5px;
+	padding: 12px 14px;
+	background: #fff;
+}
+
+.jmi-run-metrics span {
+	color: #646970;
+	font-size: 12px;
+}
+
+.jmi-run-formats {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 14px;
+}
+
+.jmi-run-formats > span {
+	padding: 5px 8px;
+	border-radius: 6px;
+	background: #f0f6fc;
+}
+
+.jmi-run-formats code {
+	font-size: 11px;
+}
+
+.jmi-table-scroll {
+	overflow-x: auto;
+}
+
+.jmi-item-log th,
+.jmi-item-log td {
+	vertical-align: middle;
 }
 
 .jmi-field-label {
@@ -399,6 +537,15 @@
 	.jmi-alert {
 		align-items: flex-start;
 		flex-direction: column;
+	}
+
+	.jmi-panel-heading {
+		flex-direction: column;
+	}
+
+	.jmi-run summary,
+	.jmi-run-metrics {
+		grid-template-columns: 1fr;
 	}
 }
 

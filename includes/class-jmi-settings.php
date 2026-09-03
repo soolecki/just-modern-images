@@ -15,6 +15,12 @@ if ( ! class_exists( 'JMI_Diagnostics', false ) && is_readable( $jmi_diagnostics
 }
 unset( $jmi_diagnostics_file );
 
+$jmi_activity_log_file = __DIR__ . '/class-jmi-activity-log.php';
+if ( ! class_exists( 'JMI_Activity_Log', false ) && is_readable( $jmi_activity_log_file ) ) {
+	require_once $jmi_activity_log_file;
+}
+unset( $jmi_activity_log_file );
+
 /**
  * Exposes one product choice and a compact operational status.
  */
@@ -52,18 +58,30 @@ final class JMI_Settings {
 	private $media_status;
 
 	/**
+	 * Recent worker activity.
+	 *
+	 * @var JMI_Activity_Log|null
+	 */
+	private $activity_log;
+
+	/**
 	 * Set up the settings screen.
 	 *
-	 * @param JMI_Quality_Profiles $profiles     Quality profiles.
-	 * @param JMI_Capabilities     $capabilities Server capabilities.
-	 * @param JMI_Queue            $queue        Background queue.
-	 * @param JMI_Media_Status     $media_status Media Library status.
+	 * @param JMI_Quality_Profiles  $profiles     Quality profiles.
+	 * @param JMI_Capabilities      $capabilities Server capabilities.
+	 * @param JMI_Queue             $queue        Background queue.
+	 * @param JMI_Media_Status      $media_status Media Library status.
+	 * @param JMI_Activity_Log|null $activity_log Recent worker activity.
 	 */
-	public function __construct( $profiles, $capabilities, $queue, $media_status ) {
+	public function __construct( $profiles, $capabilities, $queue, $media_status, $activity_log = null ) {
 		$this->profiles     = $profiles;
 		$this->capabilities = $capabilities;
 		$this->queue        = $queue;
 		$this->media_status = $media_status;
+		$this->activity_log = $activity_log;
+		if ( ! $this->activity_log && class_exists( 'JMI_Activity_Log', false ) ) {
+			$this->activity_log = new JMI_Activity_Log();
+		}
 	}
 
 	/**
@@ -76,6 +94,7 @@ final class JMI_Settings {
 		add_action( 'admin_init', array( $this, 'register_setting' ) );
 		add_action( 'admin_post_jmi_rebuild', array( $this, 'handle_rebuild' ) );
 		add_action( 'admin_post_jmi_probe', array( $this, 'handle_probe' ) );
+		add_action( 'admin_post_jmi_export_activity', array( $this, 'handle_export_activity' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_styles' ) );
 		add_action( 'update_option_' . JMI_Quality_Profiles::OPTION_NAME, array( $this, 'handle_quality_change' ), 10, 2 );
 		add_filter( 'plugin_action_links_' . plugin_basename( JMI_PLUGIN_FILE ), array( $this, 'add_action_link' ) );
@@ -124,6 +143,9 @@ final class JMI_Settings {
 		}
 
 		$selected            = $this->profiles->selected_key();
+		$active_tab          = isset( $_GET['tab'] ) && 'activity' === sanitize_key( wp_unslash( $_GET['tab'] ) ) // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			? 'activity'
+			: 'overview';
 		$server              = $this->server_summary();
 		$capabilities        = $server['formats'];
 		$status              = $this->queue->status();
@@ -157,6 +179,17 @@ final class JMI_Settings {
 				</div>
 				<span class="jmi-version"><?php echo esc_html( 'v' . JMI_VERSION ); ?></span>
 			</div>
+
+			<nav class="nav-tab-wrapper jmi-tabs" aria-label="<?php esc_attr_e( 'Just Modern Images sections', 'just-modern-images' ); ?>">
+				<a class="nav-tab <?php echo 'overview' === $active_tab ? 'nav-tab-active' : ''; ?>" href="<?php echo esc_url( admin_url( 'options-general.php?page=' . self::PAGE_SLUG ) ); ?>"><?php esc_html_e( 'Overview', 'just-modern-images' ); ?></a>
+				<a class="nav-tab <?php echo 'activity' === $active_tab ? 'nav-tab-active' : ''; ?>" href="<?php echo esc_url( add_query_arg( 'tab', 'activity', admin_url( 'options-general.php?page=' . self::PAGE_SLUG ) ) ); ?>"><?php esc_html_e( 'Activity log', 'just-modern-images' ); ?></a>
+			</nav>
+
+			<?php if ( 'activity' === $active_tab ) : ?>
+				<?php $this->render_activity_log(); ?>
+			</div>
+				<?php return; ?>
+			<?php endif; ?>
 
 			<?php if ( isset( $_GET['jmi-rebuild'] ) ) : // phpcs:ignore WordPress.Security.NonceVerification.Recommended ?>
 				<div class="notice notice-success is-dismissible"><p><?php esc_html_e( 'The Media Library scan has been queued.', 'just-modern-images' ); ?></p></div>
@@ -285,6 +318,139 @@ final class JMI_Settings {
 	}
 
 	/**
+	 * Render recent worker runs in a separate diagnostic tab.
+	 *
+	 * @return void
+	 */
+	private function render_activity_log() {
+		$entries = $this->activity_log && method_exists( $this->activity_log, 'entries' )
+			? $this->activity_log->entries()
+			: array();
+		?>
+		<section class="jmi-panel jmi-history-panel">
+			<div class="jmi-panel-heading">
+				<div>
+					<h2><?php esc_html_e( 'Recent processing activity', 'just-modern-images' ); ?></h2>
+					<p><?php esc_html_e( 'The newest 50 worker runs are kept automatically. Counts are captured immediately before and after each run.', 'just-modern-images' ); ?></p>
+				</div>
+				<?php if ( ! empty( $entries ) ) : ?>
+					<form action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" method="post">
+						<input type="hidden" name="action" value="jmi_export_activity">
+						<?php wp_nonce_field( 'jmi_export_activity' ); ?>
+						<?php submit_button( __( 'Download diagnostic report', 'just-modern-images' ), 'secondary', 'submit', false ); ?>
+					</form>
+				<?php endif; ?>
+			</div>
+
+			<?php if ( empty( $entries ) ) : ?>
+				<div class="jmi-empty-state">
+					<strong><?php esc_html_e( 'No runs have been recorded yet.', 'just-modern-images' ); ?></strong>
+					<p><?php esc_html_e( 'The next image worker run will appear here automatically.', 'just-modern-images' ); ?></p>
+				</div>
+			<?php else : ?>
+				<div class="jmi-run-list">
+					<?php foreach ( $entries as $index => $entry ) : ?>
+						<?php
+						$before       = $entry['before']['library'] ?? array();
+						$after        = $entry['after']['library'] ?? array();
+						$before_queue = $entry['before']['queue'] ?? array();
+						$after_queue  = $entry['after']['queue'] ?? array();
+						$items        = is_array( $entry['items'] ?? null ) ? $entry['items'] : array();
+						$started_at   = (int) ( $entry['started_at'] ?? 0 );
+						$duration     = max( 0, (int) ( $entry['duration_ms'] ?? 0 ) ) / 1000;
+						$regression   = (int) ( $after['ready'] ?? 0 ) < (int) ( $before['ready'] ?? 0 );
+						?>
+						<details class="jmi-run<?php echo $regression ? ' jmi-run--regression' : ''; ?>" <?php echo 0 === $index ? 'open' : ''; ?>>
+							<summary>
+								<span class="jmi-run-time"><?php echo esc_html( $started_at ? wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $started_at ) : __( 'Unknown time', 'just-modern-images' ) ); ?></span>
+								<span class="jmi-run-server"><code><?php echo esc_html( (string) ( $entry['server'] ?? '' ) ); ?></code></span>
+								<span class="jmi-run-progress">
+									<?php
+									/* translators: 1: ready count before, 2: ready count after, 3: total eligible images. */
+									echo esc_html( sprintf( __( 'Ready %1$s → %2$s of %3$s', 'just-modern-images' ), number_format_i18n( (int) ( $before['ready'] ?? 0 ) ), number_format_i18n( (int) ( $after['ready'] ?? 0 ) ), number_format_i18n( (int) ( $after['total'] ?? 0 ) ) ) );
+									?>
+								</span>
+								<span class="jmi-run-result"><?php echo esc_html( $this->activity_result_label( $entry ) ); ?></span>
+							</summary>
+
+							<div class="jmi-run-body">
+								<div class="jmi-run-metrics">
+									<div>
+										<span><?php esc_html_e( 'Before', 'just-modern-images' ); ?></span>
+										<strong><?php echo esc_html( $this->activity_snapshot_label( $before ) ); ?></strong>
+									</div>
+									<div>
+										<span><?php esc_html_e( 'After', 'just-modern-images' ); ?></span>
+										<strong><?php echo esc_html( $this->activity_snapshot_label( $after ) ); ?></strong>
+									</div>
+									<div>
+										<span><?php esc_html_e( 'Queue', 'just-modern-images' ); ?></span>
+										<strong>
+											<?php
+											/* translators: 1: queue cursor before, 2: queue cursor after, 3: processed count after. */
+											echo esc_html( sprintf( __( 'Cursor %1$s → %2$s; processed %3$s', 'just-modern-images' ), number_format_i18n( (int) ( $before_queue['cursor'] ?? 0 ) ), number_format_i18n( (int) ( $after_queue['cursor'] ?? 0 ) ), number_format_i18n( (int) ( $after_queue['processed'] ?? 0 ) ) ) );
+											?>
+										</strong>
+									</div>
+									<div>
+										<span><?php esc_html_e( 'Run', 'just-modern-images' ); ?></span>
+										<strong>
+											<?php
+											/* translators: 1: processed images, 2: duration in seconds, 3: worker version. */
+											echo esc_html( sprintf( __( '%1$s images; %2$s s; v%3$s', 'just-modern-images' ), number_format_i18n( (int) ( $entry['processed'] ?? 0 ) ), number_format_i18n( $duration, 1 ), (string) ( $entry['worker_version'] ?? '' ) ) );
+											?>
+										</strong>
+									</div>
+								</div>
+
+								<div class="jmi-run-formats">
+									<?php
+									foreach ( array(
+										'image/avif' => 'AVIF',
+										'image/webp' => 'WebP',
+									) as $mime_type => $format_label ) :
+										?>
+										<?php $format = $entry['formats'][ $mime_type ] ?? array(); ?>
+										<span><strong><?php echo esc_html( $format_label ); ?></strong> <?php echo esc_html( sanitize_key( $format['state'] ?? 'unknown' ) ); ?> <code><?php echo esc_html( sanitize_key( $format['reason'] ?? 'not_checked' ) ); ?></code></span>
+									<?php endforeach; ?>
+								</div>
+
+								<?php if ( ! empty( $items ) ) : ?>
+									<div class="jmi-table-scroll">
+										<table class="widefat striped jmi-item-log">
+											<thead><tr>
+												<th><?php esc_html_e( 'Media', 'just-modern-images' ); ?></th>
+												<th><?php esc_html_e( 'Status change', 'just-modern-images' ); ?></th>
+												<th><?php esc_html_e( 'Result', 'just-modern-images' ); ?></th>
+												<th><?php esc_html_e( 'Time', 'just-modern-images' ); ?></th>
+											</tr></thead>
+											<tbody>
+											<?php foreach ( $items as $item ) : ?>
+												<tr>
+													<td><a href="<?php echo esc_url( get_edit_post_link( (int) $item['attachment_id'] ) ); ?>">#<?php echo esc_html( number_format_i18n( (int) $item['attachment_id'] ) ); ?></a></td>
+													<td><code><?php echo esc_html( $this->activity_item_transition_label( $item ) ); ?></code></td>
+													<td><?php echo esc_html( $this->activity_item_result_label( $item ) ); ?>
+													<?php
+													if ( ! empty( $item['after_reason'] ) ) :
+														?>
+														<code><?php echo esc_html( sanitize_key( $item['after_reason'] ) ); ?></code><?php endif; ?></td>
+													<td><?php echo esc_html( number_format_i18n( max( 0, (int) ( $item['duration_ms'] ?? 0 ) ) / 1000, 2 ) ); ?> s</td>
+												</tr>
+											<?php endforeach; ?>
+											</tbody>
+										</table>
+									</div>
+								<?php endif; ?>
+							</div>
+						</details>
+					<?php endforeach; ?>
+				</div>
+			<?php endif; ?>
+		</section>
+		<?php
+	}
+
+	/**
 	 * Queue a fresh scan after the quality profile changes.
 	 *
 	 * @param mixed $old_value Previous value.
@@ -336,6 +502,39 @@ final class JMI_Settings {
 		$this->queue->start_scan( 'capability_checked' );
 
 		wp_safe_redirect( add_query_arg( 'jmi-probe', $probe_result, admin_url( 'options-general.php?page=' . self::PAGE_SLUG ) ) );
+		exit;
+	}
+
+	/**
+	 * Download a safe JSON report of recent processing activity.
+	 *
+	 * @return void
+	 */
+	public function handle_export_activity() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You are not allowed to perform this action.', 'just-modern-images' ) );
+		}
+
+		check_admin_referer( 'jmi_export_activity' );
+		if ( ! $this->activity_log || ! method_exists( $this->activity_log, 'report' ) ) {
+			wp_die( esc_html__( 'The activity report is not available on this server yet.', 'just-modern-images' ) );
+		}
+
+		$server = $this->server_summary();
+		$stats  = $this->media_status->library_stats( $this->profiles->generation_profile() );
+		$report = $this->activity_log->report(
+			array(
+				'server'        => (string) ( $server['environment_id'] ?? '' ),
+				'profile_count' => (int) ( $server['profile_count'] ?? 0 ),
+				'formats'       => $server['formats'] ?? array(),
+				'current'       => $this->activity_snapshot( $stats, $this->queue->status() ),
+			)
+		);
+
+		nocache_headers();
+		header( 'Content-Type: application/json; charset=utf-8' );
+		header( 'Content-Disposition: attachment; filename="just-modern-images-diagnostics-' . gmdate( 'Ymd-His' ) . '.json"' );
+		echo wp_json_encode( $report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
 		exit;
 	}
 
@@ -405,6 +604,127 @@ final class JMI_Settings {
 	}
 
 	/**
+	 * Build a safe current-state snapshot for a diagnostic export.
+	 *
+	 * @param array<string, int>   $stats  Library statistics.
+	 * @param array<string, mixed> $status Queue status.
+	 * @return array<string, mixed>
+	 */
+	private function activity_snapshot( $stats, $status ) {
+		return array(
+			'library' => array(
+				'total'     => (int) ( $stats['total'] ?? 0 ),
+				'ready'     => (int) ( $stats['ready'] ?? 0 ),
+				'partial'   => (int) ( $stats['partial'] ?? 0 ),
+				'waiting'   => (int) ( $stats['pending'] ?? 0 ) + (int) ( $stats['queued'] ?? 0 ) + (int) ( $stats['processing'] ?? 0 ) + (int) ( $stats['stale'] ?? 0 ),
+				'attention' => (int) ( $stats['failed'] ?? 0 ),
+				'skipped'   => (int) ( $stats['skipped'] ?? 0 ),
+				'reviewed'  => (int) ( $stats['reviewed'] ?? 0 ),
+			),
+			'queue'   => array(
+				'status'    => (string) ( $status['status'] ?? '' ),
+				'reason'    => (string) ( $status['reason'] ?? '' ),
+				'cursor'    => (int) ( $status['cursor'] ?? 0 ),
+				'total'     => (int) ( $status['total'] ?? 0 ),
+				'processed' => (int) ( $status['processed'] ?? 0 ),
+				'generated' => (int) ( $status['generated'] ?? 0 ),
+				'failed'    => (int) ( $status['failed'] ?? 0 ),
+			),
+		);
+	}
+
+	/**
+	 * Summarize one library snapshot.
+	 *
+	 * @param array<string, mixed> $library Library counts.
+	 * @return string
+	 */
+	private function activity_snapshot_label( $library ) {
+		return sprintf(
+			/* translators: 1: ready, 2: partly ready, 3: waiting, 4: needs attention, 5: safely skipped. */
+			__( '%1$s ready, %2$s partial, %3$s waiting, %4$s attention, %5$s skipped', 'just-modern-images' ),
+			number_format_i18n( (int) ( $library['ready'] ?? 0 ) ),
+			number_format_i18n( (int) ( $library['partial'] ?? 0 ) ),
+			number_format_i18n( (int) ( $library['waiting'] ?? 0 ) ),
+			number_format_i18n( (int) ( $library['attention'] ?? 0 ) ),
+			number_format_i18n( (int) ( $library['skipped'] ?? 0 ) )
+		);
+	}
+
+	/**
+	 * Summarize the top-level result of one activity entry.
+	 *
+	 * @param array<string, mixed> $entry Activity entry.
+	 * @return string
+	 */
+	private function activity_result_label( $entry ) {
+		$type = sanitize_key( $entry['type'] ?? '' );
+		if ( 'scan_requested' === $type ) {
+			return sprintf(
+				/* translators: %s: reason the scan was requested. */
+				__( 'Scan queued: %s', 'just-modern-images' ),
+				sanitize_key( $entry['source'] ?? '' )
+			);
+		}
+
+		$reason = sanitize_key( $entry['stop_reason'] ?? '' );
+		if ( 'attachment' === $type ) {
+			return __( 'Single image event', 'just-modern-images' );
+		}
+
+		return $this->worker_stop_label( $reason );
+	}
+
+	/**
+	 * Summarize counters for one processed attachment.
+	 *
+	 * @param array<string, mixed> $item Attachment activity.
+	 * @return string
+	 */
+	private function activity_item_result_label( $item ) {
+		return sprintf(
+			/* translators: 1: generated files, 2: reused files, 3: retained files, 4: skipped files, 5: failed files. */
+			__( 'Generated %1$s, reused %2$s, retained %3$s, skipped %4$s, failed %5$s', 'just-modern-images' ),
+			number_format_i18n( (int) ( $item['generated'] ?? 0 ) ),
+			number_format_i18n( (int) ( $item['reused'] ?? 0 ) ),
+			number_format_i18n( (int) ( $item['retained'] ?? 0 ) ),
+			number_format_i18n( (int) ( $item['skipped'] ?? 0 ) ),
+			number_format_i18n( (int) ( $item['failed'] ?? 0 ) )
+		);
+	}
+
+	/**
+	 * Describe how an attachment entered the queue and how it finished.
+	 *
+	 * @param array<string, mixed> $item Attachment activity.
+	 * @return string
+	 */
+	private function activity_item_transition_label( $item ) {
+		$before      = sanitize_key( $item['before_state'] ?? '' );
+		$after       = sanitize_key( $item['after_state'] ?? '' );
+		$queued_from = sanitize_key( $item['queued_from'] ?? '' );
+		$source      = sanitize_key( $item['queue_source'] ?? '' );
+		$states      = array();
+
+		if ( $queued_from && $queued_from !== $before ) {
+			$states[] = $queued_from;
+		}
+		if ( $before ) {
+			$states[] = $before;
+		}
+		if ( $after && $after !== $before ) {
+			$states[] = $after;
+		}
+
+		$label = implode( ' → ', $states );
+		if ( $source ) {
+			$label .= ' (' . $source . ')';
+		}
+
+		return $label;
+	}
+
+	/**
 	 * Return capability details without assuming every cached component is current.
 	 *
 	 * @return array<string, mixed>
@@ -412,7 +732,7 @@ final class JMI_Settings {
 	private function server_summary() {
 		if ( method_exists( $this->capabilities, 'diagnostic_summary' ) ) {
 			$summary                   = $this->capabilities->diagnostic_summary();
-			$summary['rolling_update'] = version_compare( JMI_VERSION, '0.11.4', '<' );
+			$summary['rolling_update'] = version_compare( JMI_VERSION, '0.11.5', '<' );
 			return $summary;
 		}
 

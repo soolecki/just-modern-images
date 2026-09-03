@@ -45,6 +45,27 @@ final class JMI_Queue {
 	private $media_status;
 
 	/**
+	 * Server capability provider.
+	 *
+	 * @var JMI_Capabilities|null
+	 */
+	private $capabilities;
+
+	/**
+	 * Bounded administrator activity history.
+	 *
+	 * @var JMI_Activity_Log|null
+	 */
+	private $activity_log;
+
+	/**
+	 * Item transitions collected by the active library scan.
+	 *
+	 * @var array<int, array<string, int|string>>
+	 */
+	private $active_run_items = array();
+
+	/**
 	 * Attachments encountered during the current frontend request.
 	 *
 	 * @var array<int, bool>
@@ -77,14 +98,18 @@ final class JMI_Queue {
 	/**
 	 * Set up the queue.
 	 *
-	 * @param JMI_Converter        $converter    Attachment converter.
-	 * @param JMI_Quality_Profiles $profiles     Quality profile provider.
-	 * @param JMI_Media_Status     $media_status Per-attachment status.
+	 * @param JMI_Converter         $converter    Attachment converter.
+	 * @param JMI_Quality_Profiles  $profiles     Quality profile provider.
+	 * @param JMI_Media_Status      $media_status Per-attachment status.
+	 * @param JMI_Capabilities|null $capabilities Server capabilities.
+	 * @param JMI_Activity_Log|null $activity_log Bounded activity history.
 	 */
-	public function __construct( $converter, $profiles, $media_status ) {
+	public function __construct( $converter, $profiles, $media_status, $capabilities = null, $activity_log = null ) {
 		$this->converter    = $converter;
 		$this->profiles     = $profiles;
 		$this->media_status = $media_status;
+		$this->capabilities = $capabilities;
+		$this->activity_log = $activity_log;
 	}
 
 	/**
@@ -123,9 +148,10 @@ final class JMI_Queue {
 	 * @param int    $delay         Delay in seconds.
 	 * @param string $priority      Priority lane.
 	 * @param bool   $expedite      Whether an existing later event may be moved.
+	 * @param bool   $update_status Whether to mark the attachment as queued.
 	 * @return bool
 	 */
-	public function schedule_attachment( $attachment_id, $delay = 1, $priority = 'background', $expedite = false ) {
+	public function schedule_attachment( $attachment_id, $delay = 1, $priority = 'background', $expedite = false, $update_status = true ) {
 		$attachment_id = absint( $attachment_id );
 		$args          = array( $attachment_id );
 
@@ -141,7 +167,7 @@ final class JMI_Queue {
 
 		if ( $current_event ) {
 			if ( (int) $current_event <= $scheduled_for ) {
-				if ( $is_higher ) {
+				if ( $is_higher && $update_status ) {
 					$this->media_status->mark_queued( $attachment_id, $priority, $this->profiles->generation_profile() );
 				}
 				return false;
@@ -155,7 +181,7 @@ final class JMI_Queue {
 		}
 
 		$scheduled = (bool) wp_schedule_single_event( $scheduled_for, self::PROCESS_HOOK, $args );
-		if ( $scheduled ) {
+		if ( $scheduled && $update_status ) {
 			$this->media_status->mark_queued( $attachment_id, $priority, $this->profiles->generation_profile() );
 		}
 
@@ -214,7 +240,15 @@ final class JMI_Queue {
 			return false;
 		}
 
+		$generation_profile = $this->profiles->generation_profile();
+		$initial_status     = $this->media_status->get( $attachment_id, $generation_profile );
+		if ( ! $owns_worker_lock && $this->is_current_terminal( $initial_status ) ) {
+			return false;
+		}
+
 		$acquired_worker_lock = false;
+		$standalone_started   = 0.0;
+		$standalone_before    = array();
 		if ( ! $owns_worker_lock ) {
 			$this->start_request_budget();
 			$time_budget = $this->worker_time_budget( self::$request_worker_started_at );
@@ -231,6 +265,15 @@ final class JMI_Queue {
 				return false;
 			}
 			$acquired_worker_lock = true;
+			$initial_status       = $this->media_status->get( $attachment_id, $generation_profile );
+			if ( $this->is_current_terminal( $initial_status ) ) {
+				$this->release_worker_lock();
+				return false;
+			}
+			if ( $this->activity_log ) {
+				$standalone_started = microtime( true );
+				$standalone_before  = $this->safe_activity_snapshot();
+			}
 		}
 
 		try {
@@ -241,8 +284,7 @@ final class JMI_Queue {
 				return false;
 			}
 
-			$generation_profile = $this->profiles->generation_profile();
-			$current_status     = $this->media_status->get( $attachment_id, $generation_profile );
+			$current_status = $this->media_status->get( $attachment_id, $generation_profile );
 			$this->media_status->mark_processing( $attachment_id, $current_status['priority'], $generation_profile );
 
 			try {
@@ -264,7 +306,31 @@ final class JMI_Queue {
 
 			$this->media_status->record_result( $attachment_id, $generation_profile, $summary );
 			$this->record_counters( $summary );
-			$this->record_request_attempt( microtime( true ) - $item_started );
+			$item_duration = microtime( true ) - $item_started;
+			$this->record_request_attempt( $item_duration );
+			$final_status = $this->media_status->get( $attachment_id, $generation_profile );
+			$item_record  = $this->activity_item( $attachment_id, $initial_status, $final_status, $summary, $item_duration );
+
+			if ( $owns_worker_lock && $this->activity_log ) {
+				$this->active_run_items[] = $item_record;
+			} elseif ( $this->activity_log ) {
+				$this->record_activity(
+					array(
+						'type'        => 'attachment',
+						'source'      => (string) ( $initial_status['priority'] ?? 'background' ),
+						'started_at'  => (int) floor( $standalone_started ),
+						'finished_at' => time(),
+						'duration_ms' => (int) round( ( microtime( true ) - $standalone_started ) * 1000 ),
+						'stop_reason' => sanitize_key( $summary['last_reason'] ?? '' ),
+						'complete'    => true,
+						'attempts'    => 1,
+						'processed'   => 1,
+						'before'      => $standalone_before,
+						'after'       => $this->safe_activity_snapshot(),
+						'items'       => array( $item_record ),
+					)
+				);
+			}
 
 			return true;
 		} finally {
@@ -283,6 +349,7 @@ final class JMI_Queue {
 	public function start_scan( $reason = 'manual' ) {
 		$generation_profile = $this->profiles->generation_profile();
 		$current            = $this->status();
+		$started_at         = microtime( true );
 
 		if (
 			'upgrade' === sanitize_key( $reason ) &&
@@ -293,7 +360,8 @@ final class JMI_Queue {
 			return;
 		}
 
-		$stats = $this->media_status->library_stats( $generation_profile );
+		$stats  = $this->media_status->library_stats( $generation_profile );
+		$before = $this->safe_activity_snapshot( $stats, $current );
 		update_option(
 			self::STATUS_OPTION,
 			array(
@@ -327,6 +395,22 @@ final class JMI_Queue {
 		);
 
 		$this->schedule_scan( 3 );
+		$this->record_activity(
+			array(
+				'type'        => 'scan_requested',
+				'source'      => sanitize_key( $reason ),
+				'started_at'  => (int) floor( $started_at ),
+				'finished_at' => time(),
+				'duration_ms' => (int) round( ( microtime( true ) - $started_at ) * 1000 ),
+				'stop_reason' => 'scheduled',
+				'complete'    => false,
+				'attempts'    => 0,
+				'processed'   => 0,
+				'before'      => $before,
+				'after'       => $this->safe_activity_snapshot( $stats ),
+				'items'       => array(),
+			)
+		);
 	}
 
 	/**
@@ -382,17 +466,20 @@ final class JMI_Queue {
 		}
 
 		$this->start_request_budget();
-		$started_at       = microtime( true );
-		$status           = $this->status();
-		$cursor           = isset( $status['cursor'] ) ? absint( $status['cursor'] ) : 0;
-		$page_size        = min( 100, max( 1, (int) apply_filters( 'jmi_scan_batch_size', 20 ) ) );
-		$max_items        = min( 100, max( 1, (int) apply_filters( 'jmi_worker_max_items', 50 ) ) );
-		$time_budget      = $this->worker_time_budget( $started_at );
-		$memory_threshold = min( 0.95, max( 0.5, (float) apply_filters( 'jmi_worker_memory_threshold', 0.8 ) ) );
-		$attempts         = 0;
-		$processed        = 0;
-		$stop_reason      = '';
-		$complete         = false;
+		$started_at             = microtime( true );
+		$status                 = $this->status();
+		$cursor                 = isset( $status['cursor'] ) ? absint( $status['cursor'] ) : 0;
+		$page_size              = min( 100, max( 1, (int) apply_filters( 'jmi_scan_batch_size', 20 ) ) );
+		$max_items              = min( 100, max( 1, (int) apply_filters( 'jmi_worker_max_items', 50 ) ) );
+		$time_budget            = $this->worker_time_budget( $started_at );
+		$memory_threshold       = min( 0.95, max( 0.5, (float) apply_filters( 'jmi_worker_memory_threshold', 0.8 ) ) );
+		$attempts               = 0;
+		$processed              = 0;
+		$stop_reason            = '';
+		$complete               = false;
+		$run_source             = sanitize_key( $status['reason'] ?? 'background' );
+		$run_before             = $this->activity_log ? $this->safe_activity_snapshot( null, $status ) : array();
+		$this->active_run_items = array();
 
 		try {
 			while ( ! $stop_reason ) {
@@ -448,14 +535,37 @@ final class JMI_Queue {
 			$status['last_reason'] = 'unexpected_worker_failure';
 			update_option( self::STATUS_OPTION, $status, false );
 		} finally {
-			$this->record_worker_run(
-				$processed,
-				$attempts,
-				microtime( true ) - $started_at,
-				$stop_reason,
-				$complete
-			);
-			$this->release_worker_lock();
+			try {
+				$this->record_worker_run(
+					$processed,
+					$attempts,
+					microtime( true ) - $started_at,
+					$stop_reason,
+					$complete
+				);
+				if ( $this->activity_log ) {
+					$this->record_activity(
+						array(
+							'type'           => 'scan',
+							'source'         => $run_source,
+							'started_at'     => (int) floor( $started_at ),
+							'finished_at'    => time(),
+							'duration_ms'    => (int) round( ( microtime( true ) - $started_at ) * 1000 ),
+							'worker_version' => defined( 'JMI_VERSION' ) ? (string) JMI_VERSION : '',
+							'stop_reason'    => $stop_reason,
+							'complete'       => $complete,
+							'attempts'       => $attempts,
+							'processed'      => $processed,
+							'before'         => $run_before,
+							'after'          => $this->safe_activity_snapshot(),
+							'items'          => $this->active_run_items,
+						)
+					);
+				}
+			} finally {
+				$this->active_run_items = array();
+				$this->release_worker_lock();
+			}
 		}
 
 		if ( ! $complete ) {
@@ -670,7 +780,17 @@ final class JMI_Queue {
 		$status   = $this->media_status->get( $attachment_id, $this->profiles->generation_profile() );
 		$priority = $this->normalize_priority( $status['priority'] );
 
-		$this->schedule_attachment( $attachment_id, $delay, $priority, true );
+		$this->schedule_attachment( $attachment_id, $delay, $priority, true, false );
+	}
+
+	/**
+	 * Check whether a delayed event targets an already settled image.
+	 *
+	 * @param array<string, mixed> $status Attachment status.
+	 * @return bool
+	 */
+	private function is_current_terminal( $status ) {
+		return in_array( $status['state'] ?? '', array( 'ready', 'partial', 'skipped' ), true );
 	}
 
 	/**
@@ -739,6 +859,116 @@ final class JMI_Queue {
 		$status['last_reason'] = sanitize_key( $summary['last_reason'] ?? '' );
 		$status['last_update'] = time();
 		update_option( self::STATUS_OPTION, $status, false );
+	}
+
+	/**
+	 * Build a compact before or after snapshot for the activity history.
+	 *
+	 * @param array<string, int>|null        $stats  Known library statistics.
+	 * @param array<string, int|string>|null $status Known queue status.
+	 * @return array<string, mixed>
+	 */
+	private function activity_snapshot( $stats = null, $status = null ) {
+		$stats  = is_array( $stats ) ? $stats : $this->media_status->library_stats( $this->profiles->generation_profile() );
+		$status = is_array( $status ) ? $status : $this->status();
+
+		return array(
+			'library' => array(
+				'total'     => (int) ( $stats['total'] ?? 0 ),
+				'ready'     => (int) ( $stats['ready'] ?? 0 ),
+				'partial'   => (int) ( $stats['partial'] ?? 0 ),
+				'waiting'   => (int) ( $stats['pending'] ?? 0 ) + (int) ( $stats['queued'] ?? 0 ) + (int) ( $stats['processing'] ?? 0 ) + (int) ( $stats['stale'] ?? 0 ),
+				'attention' => (int) ( $stats['failed'] ?? 0 ),
+				'skipped'   => (int) ( $stats['skipped'] ?? 0 ),
+				'reviewed'  => (int) ( $stats['reviewed'] ?? 0 ),
+			),
+			'queue'   => array(
+				'status'    => (string) ( $status['status'] ?? '' ),
+				'reason'    => (string) ( $status['reason'] ?? '' ),
+				'cursor'    => (int) ( $status['cursor'] ?? 0 ),
+				'total'     => (int) ( $status['total'] ?? 0 ),
+				'processed' => (int) ( $status['processed'] ?? 0 ),
+				'generated' => (int) ( $status['generated'] ?? 0 ),
+				'failed'    => (int) ( $status['failed'] ?? 0 ),
+			),
+		);
+	}
+
+	/**
+	 * Capture diagnostics without allowing them to affect queue execution.
+	 *
+	 * @param array<string, int>|null        $stats  Known library statistics.
+	 * @param array<string, int|string>|null $status Known queue status.
+	 * @return array<string, mixed>
+	 */
+	private function safe_activity_snapshot( $stats = null, $status = null ) {
+		try {
+			return $this->activity_snapshot( $stats, $status );
+		} catch ( Throwable $error ) {
+			return array(
+				'library' => array(),
+				'queue'   => array(),
+			);
+		}
+	}
+
+	/**
+	 * Build one per-attachment transition without retaining file information.
+	 *
+	 * @param int                  $attachment_id Attachment ID.
+	 * @param array<string, mixed> $before        Status before processing.
+	 * @param array<string, mixed> $after         Status after processing.
+	 * @param array<string, mixed> $summary       Converter result.
+	 * @param float                $duration      Processing time in seconds.
+	 * @return array<string, int|string>
+	 */
+	private function activity_item( $attachment_id, $before, $after, $summary, $duration ) {
+		return array(
+			'attachment_id' => absint( $attachment_id ),
+			'before_state'  => sanitize_key( $before['state'] ?? '' ),
+			'after_state'   => sanitize_key( $after['state'] ?? '' ),
+			'before_reason' => sanitize_key( $before['reason'] ?? '' ),
+			'after_reason'  => sanitize_key( $after['reason'] ?? '' ),
+			'queued_from'   => sanitize_key( $before['queued_from'] ?? '' ),
+			'queue_source'  => sanitize_key( $before['queue_source'] ?? '' ),
+			'generated'     => max( 0, (int) ( $summary['generated'] ?? 0 ) ),
+			'reused'        => max( 0, (int) ( $summary['reused'] ?? 0 ) ),
+			'retained'      => max( 0, (int) ( $summary['retained'] ?? 0 ) ),
+			'skipped'       => max( 0, (int) ( $summary['skipped'] ?? 0 ) ),
+			'failed'        => max( 0, (int) ( $summary['failed'] ?? 0 ) ),
+			'duration_ms'   => max( 0, (int) round( $duration * 1000 ) ),
+		);
+	}
+
+	/**
+	 * Add environment information and store one bounded history entry.
+	 *
+	 * @param array<string, mixed> $entry Activity entry.
+	 * @return void
+	 */
+	private function record_activity( $entry ) {
+		if ( ! $this->activity_log || ! method_exists( $this->activity_log, 'record' ) ) {
+			return;
+		}
+
+		try {
+			$server  = substr( hash( 'sha256', php_uname( 'n' ) . '|' . PHP_VERSION . '|' . PHP_SAPI ), 0, 12 );
+			$formats = array();
+			if ( $this->capabilities && method_exists( $this->capabilities, 'diagnostic_summary' ) ) {
+				$environment = $this->capabilities->diagnostic_summary();
+				$server      = (string) ( $environment['environment_id'] ?? $server );
+				$formats     = is_array( $environment['formats'] ?? null ) ? $environment['formats'] : array();
+			}
+
+			$entry['server']         = $server;
+			$entry['formats']        = $formats;
+			$entry['worker_version'] = (string) ( $entry['worker_version'] ?? ( defined( 'JMI_VERSION' ) ? JMI_VERSION : '' ) );
+
+			$this->activity_log->record( $entry );
+		} catch ( Throwable $error ) {
+			// Diagnostics must never interrupt image processing.
+			return;
+		}
 	}
 
 	/**

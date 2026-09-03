@@ -299,6 +299,7 @@ require_once dirname( __DIR__ ) . '/includes/class-jmi-quality-profiles.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-error-trap.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-capabilities.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-diagnostics.php';
+require_once dirname( __DIR__ ) . '/includes/class-jmi-activity-log.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-manifest.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-media-status.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-converter.php';

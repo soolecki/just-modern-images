@@ -61,6 +61,27 @@ final class AdaptiveWorkerTest extends TestCase {
 		$this->assertFalse( wp_next_scheduled( JMI_Queue::SCAN_HOOK ) );
 	}
 
+	public function test_worker_records_library_counts_before_and_after_a_run(): void {
+		global $wpdb;
+
+		$wpdb      = new JMI_Test_Attachment_Wpdb( array( 1, 2 ) );
+		$converter = new JMI_Test_Recording_Converter();
+		$history   = new JMI_Activity_Log();
+		$queue     = new JMI_Queue( $converter, new JMI_Quality_Profiles(), new JMI_Media_Status(), null, $history );
+
+		$queue->scan_library();
+
+		$entries = $history->entries();
+		$this->assertCount( 1, $entries );
+		$this->assertSame( 'scan', $entries[0]['type'] );
+		$this->assertSame( 2, $entries[0]['before']['library']['waiting'] );
+		$this->assertSame( 2, $entries[0]['after']['library']['skipped'] );
+		$this->assertSame( 2, $entries[0]['after']['queue']['cursor'] );
+		$this->assertCount( 2, $entries[0]['items'] );
+		$this->assertSame( 'pending', $entries[0]['items'][0]['before_state'] );
+		$this->assertSame( 'skipped', $entries[0]['items'][0]['after_state'] );
+	}
+
 	public function test_worker_stops_before_time_or_memory_is_exhausted(): void {
 		$queue  = $this->queue( new JMI_Test_Recording_Converter() );
 		$method = new ReflectionMethod( JMI_Queue::class, 'worker_stop_reason' );
@@ -179,7 +200,8 @@ final class JMI_Test_Recording_Converter {
 
 final class JMI_Test_Attachment_Wpdb {
 
-	public $posts = 'wp_posts';
+	public $posts    = 'wp_posts';
+	public $postmeta = 'wp_postmeta';
 
 	private $attachment_ids;
 
@@ -207,5 +229,29 @@ final class JMI_Test_Attachment_Wpdb {
 		);
 
 		return array_slice( $ids, 0, $limit );
+	}
+
+	public function get_results( $prepared ) {
+		unset( $prepared );
+		$grouped = array();
+
+		foreach ( $this->attachment_ids as $attachment_id ) {
+			$state = $GLOBALS['jmi_test_post_meta'][ $attachment_id ][ JMI_Media_Status::STATE_META_KEY ] ?? null;
+			$key   = is_string( $state ) ? $state : '__pending__';
+			if ( ! isset( $grouped[ $key ] ) ) {
+				$grouped[ $key ] = 0;
+			}
+			++$grouped[ $key ];
+		}
+
+		$rows = array();
+		foreach ( $grouped as $state => $amount ) {
+			$rows[] = (object) array(
+				'state_value' => '__pending__' === $state ? null : $state,
+				'amount'      => $amount,
+			);
+		}
+
+		return $rows;
 	}
 }
