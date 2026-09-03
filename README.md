@@ -27,7 +27,9 @@ self-healing after interrupted single events and replaces release-number
 migrations with a monotonic data revision that remains stable during rolling
 OPcache refreshes. Version 0.11.5 prevents delayed events from reopening settled
 images and adds a bounded, privacy-safe history of worker runs with before and
-after state. The project is still in pre-release development and needs broader
+after state. Version 0.11.6 adds explicit opt-in reporting for privately tested
+installations and a standalone, password-protected fleet dashboard. The project
+is still in pre-release development and needs broader
 integration testing before a public WordPress.org release.
 
 ## Development
@@ -46,6 +48,28 @@ Create an installable archive with:
 ```bash
 composer build
 ```
+
+The temporary test-fleet receiver lives in `tools/diagnostics-endpoint`. Build
+its separate deployment archive with:
+
+```bash
+composer build-endpoint
+```
+
+Reporting is disabled by default and requires an administrator to select
+**Send diagnostic data** on the Activity log screen. The receiver URL is compiled
+into private test builds, so site administrators never have to configure an
+endpoint or credential.
+
+Build a private test ZIP connected to a deployed receiver with:
+
+```bash
+JMI_DIAGNOSTICS_ENDPOINT=https://diagnostics.example.com/ \
+JMI_DIAGNOSTICS_FLEET_KEY=replace-with-a-long-random-key composer build
+```
+
+The environment values are written only to the generated ZIP. The source tree
+continues to produce a normal build with no connected receiver.
 
 ## License
 

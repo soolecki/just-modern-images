@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 final class JMI_Activity_Log {
 
 	const OPTION_NAME = 'jmi_activity_log';
-	const SCHEMA      = 1;
+	const SCHEMA      = 2;
 	const MAX_ENTRIES = 50;
 	const MAX_ITEMS   = 50;
 
@@ -36,6 +36,13 @@ final class JMI_Activity_Log {
 		$entries = array_slice( $entries, 0, self::MAX_ENTRIES );
 
 		update_option( self::OPTION_NAME, $entries, false );
+
+		try {
+			do_action( 'jmi_activity_recorded', $entry );
+		} catch ( Throwable $error ) {
+			// Optional observers must never interrupt image processing.
+			return;
+		}
 	}
 
 	/**
@@ -84,6 +91,7 @@ final class JMI_Activity_Log {
 		if ( ! $started_at ) {
 			return array();
 		}
+		$performance = is_array( $entry['performance'] ?? null ) ? $entry['performance'] : array();
 
 		$normalized = array(
 			'id'             => $this->token( $entry['id'] ?? '' ),
@@ -98,6 +106,14 @@ final class JMI_Activity_Log {
 			'complete'       => ! empty( $entry['complete'] ),
 			'attempts'       => max( 0, (int) ( $entry['attempts'] ?? 0 ) ),
 			'processed'      => max( 0, (int) ( $entry['processed'] ?? 0 ) ),
+			'performance'    => array(
+				'scheduled_for'  => max( 0, (int) ( $entry['scheduled_for'] ?? ( $performance['scheduled_for'] ?? 0 ) ) ),
+				'start_delay_ms' => max( 0, (int) ( $entry['start_delay_ms'] ?? ( $performance['start_delay_ms'] ?? 0 ) ) ),
+				'time_budget_ms' => max( 0, (int) ( $entry['time_budget_ms'] ?? ( $performance['time_budget_ms'] ?? 0 ) ) ),
+				'memory_start'   => max( 0, (int) ( $entry['memory_start'] ?? ( $performance['memory_start'] ?? 0 ) ) ),
+				'memory_peak'    => max( 0, (int) ( $entry['memory_peak'] ?? ( $performance['memory_peak'] ?? 0 ) ) ),
+				'memory_limit'   => max( 0, (int) ( $entry['memory_limit'] ?? ( $performance['memory_limit'] ?? 0 ) ) ),
+			),
 			'before'         => $this->normalize_snapshot( $entry['before'] ?? array() ),
 			'after'          => $this->normalize_snapshot( $entry['after'] ?? array() ),
 			'formats'        => $this->normalize_formats( $entry['formats'] ?? array() ),

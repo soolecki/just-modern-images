@@ -16,6 +16,8 @@ $GLOBALS['jmi_test_mime_types']        = array();
 $GLOBALS['jmi_test_scheduled']         = array();
 $GLOBALS['jmi_test_filters']           = array();
 $GLOBALS['jmi_test_translation_calls'] = array();
+$GLOBALS['jmi_test_remote_requests']   = array();
+$GLOBALS['jmi_test_remote_response']   = array( 'response' => array( 'code' => 202 ) );
 
 function __( $text, $domain = 'default' ) {
 	$GLOBALS['jmi_test_translation_calls'][] = $domain;
@@ -24,6 +26,10 @@ function __( $text, $domain = 'default' ) {
 
 function sanitize_key( $key ) {
 	return preg_replace( '/[^a-z0-9_\-]/', '', strtolower( (string) $key ) );
+}
+
+function wp_strip_all_tags( $text ) {
+	return strip_tags( (string) $text );
 }
 
 function get_option( $name, $default = false ) {
@@ -100,7 +106,40 @@ function delete_option( $name ) {
 }
 
 function get_bloginfo( $show ) {
-	return 'version' === $show ? '6.5' : '';
+	if ( 'version' === $show ) {
+		return '6.5';
+	}
+
+	return 'name' === $show ? 'Example Site' : '';
+}
+
+function home_url( $path = '' ) {
+	return 'https://example.test/' . ltrim( $path, '/' );
+}
+
+function is_multisite() {
+	return false;
+}
+
+function wp_generate_uuid4() {
+	return '11111111-2222-4333-8444-555555555555';
+}
+
+function wp_generate_password() {
+	return 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV';
+}
+
+function wp_safe_remote_post( $url, $args ) {
+	$GLOBALS['jmi_test_remote_requests'][] = array(
+		'url'  => $url,
+		'args' => $args,
+	);
+
+	return $GLOBALS['jmi_test_remote_response'];
+}
+
+function wp_remote_retrieve_response_code( $response ) {
+	return (int) ( $response['response']['code'] ?? 0 );
 }
 
 function wp_json_encode( $value ) {
@@ -189,7 +228,8 @@ function wp_convert_hr_to_bytes( $value ) {
 	return $number;
 }
 
-function is_wp_error() {
+function is_wp_error( $value = null ) {
+	unset( $value );
 	return false;
 }
 
@@ -300,6 +340,7 @@ require_once dirname( __DIR__ ) . '/includes/class-jmi-error-trap.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-capabilities.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-diagnostics.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-activity-log.php';
+require_once dirname( __DIR__ ) . '/includes/class-jmi-diagnostics-reporter.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-manifest.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-media-status.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-converter.php';

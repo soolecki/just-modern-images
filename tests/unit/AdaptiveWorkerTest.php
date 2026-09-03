@@ -80,6 +80,8 @@ final class AdaptiveWorkerTest extends TestCase {
 		$this->assertCount( 2, $entries[0]['items'] );
 		$this->assertSame( 'pending', $entries[0]['items'][0]['before_state'] );
 		$this->assertSame( 'skipped', $entries[0]['items'][0]['after_state'] );
+		$this->assertGreaterThan( 0, $entries[0]['performance']['time_budget_ms'] );
+		$this->assertGreaterThanOrEqual( $entries[0]['performance']['memory_start'], $entries[0]['performance']['memory_peak'] );
 	}
 
 	public function test_worker_stops_before_time_or_memory_is_exhausted(): void {
@@ -127,6 +129,7 @@ final class AdaptiveWorkerTest extends TestCase {
 		$this->assertCount( 1, $GLOBALS['jmi_test_scheduled'] );
 		$this->assertSame( JMI_Queue::SCAN_HOOK, $GLOBALS['jmi_test_scheduled'][0]['hook'] );
 		$this->assertSame( 'scheduled', $queue->status()['last_schedule_result'] );
+		$this->assertSame( $GLOBALS['jmi_test_scheduled'][0]['timestamp'], $queue->status()['next_worker_due'] );
 	}
 
 	public function test_overdue_scan_event_and_stale_lock_are_recovered(): void {

@@ -72,16 +72,21 @@ final class JMI_Plugin {
 		$profiles           = new JMI_Quality_Profiles();
 		$capabilities       = new JMI_Capabilities();
 		$activity_log       = class_exists( 'JMI_Activity_Log', false ) ? new JMI_Activity_Log() : null;
+		$reporter           = class_exists( 'JMI_Diagnostics_Reporter', false ) ? new JMI_Diagnostics_Reporter() : null;
 		$this->manifest     = new JMI_Manifest();
 		$this->media_status = new JMI_Media_Status();
 		$inventory          = new JMI_Source_Inventory();
 		$converter          = new JMI_Converter( $profiles, $capabilities, $inventory, $this->manifest );
 		$this->queue        = new JMI_Queue( $converter, $profiles, $this->media_status, $capabilities, $activity_log );
 		$renderer           = new JMI_Renderer( $this->manifest, $this->queue );
-		$settings           = new JMI_Settings( $profiles, $capabilities, $this->queue, $this->media_status, $activity_log );
+		$settings           = new JMI_Settings( $profiles, $capabilities, $this->queue, $this->media_status, $activity_log, $reporter );
 		$media_admin        = new JMI_Media_Admin( $this->media_status, $this->manifest, $this->queue, $profiles, $capabilities );
 
 		$this->queue->register();
+		if ( $reporter ) {
+			$reporter->register();
+			$reporter->bootstrap_history( $activity_log ? $activity_log->entries() : array() );
+		}
 		$renderer->register();
 		$settings->register();
 		$media_admin->register();

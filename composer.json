@@ -17,6 +17,7 @@
   },
   "scripts": {
     "build": "php tools/build.php",
+    "build-endpoint": "php tools/build-diagnostics-endpoint.php",
     "lint": "phpcs",
     "test": "phpunit"
   }

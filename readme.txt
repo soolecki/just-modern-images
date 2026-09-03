@@ -3,7 +3,7 @@ Tags: webp, avif, images, performance, optimization
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.11.5
+Stable tag: 0.11.6
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -47,7 +47,9 @@ When WordPress renders a page, attachments used by that response can move ahead 
 
 = Privacy =
 
-The plugin processes images on your own server. It does not contact an external service, create an account, track visitors, or collect usage data.
+The plugin processes images on your own server and does not send diagnostic data by default. Private test builds may contain a diagnostic receiver. Sending starts only after an administrator selects Send diagnostic data on the Activity log screen.
+
+An enabled test report contains the WordPress site name and public homepage address, WordPress, PHP, and plugin versions, image-library availability, format capability states, queue snapshots, aggregated processing results, and redacted fatal errors originating in the plugin directory. It does not contain image files, Media Library filenames or attachment IDs, visited page addresses, user details, email addresses, cookies, or administrator credentials. Reporting can be disabled at any time; disabling it removes reports waiting locally.
 
 == Installation ==
 
@@ -98,6 +100,16 @@ The plugin uses normal WordPress upload URLs and provides a filter for CDN integ
 Not in this release. The first release intentionally covers attachment images rendered through standard WordPress APIs without buffering or rewriting the entire page.
 
 == Changelog ==
+
+= 0.11.6 =
+
+* Added explicit administrator opt-in for diagnostic reports from private test installations.
+* Included the site name and public homepage address so reported problems can be verified on the correct site.
+* Added a bounded, retry-safe reporting outbox with short timeouts, sender locking, and exponential backoff.
+* Added real cron-frequency, scheduling-delay, worker-throughput, per-image timing, and memory measurements.
+* Removed attachment IDs, filenames, visitor information, and page addresses from remote reports.
+* Added redacted fatal-error capture limited to errors originating in the plugin directory.
+* Added a separate password-protected PHP receiver and fleet dashboard for private testing; it is not included in the plugin ZIP.
 
 = 0.11.5 =
 

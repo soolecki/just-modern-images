@@ -417,6 +417,60 @@
 	background: #fcf9e8;
 }
 
+.jmi-diagnostics-panel {
+	margin-bottom: 18px;
+}
+
+.jmi-reporting-state {
+	display: inline-flex;
+	align-items: center;
+	min-height: 28px;
+	padding: 0 11px;
+	border-radius: 999px;
+	background: #f0f0f1;
+	color: #50575e;
+	font-size: 12px;
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.jmi-reporting-state--on {
+	background: #edfaef;
+	color: #006b1b;
+}
+
+.jmi-reporting-choice {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+	max-width: 850px;
+	margin: 18px 0 10px;
+	padding: 16px;
+	border: 1px solid #dcdcde;
+	border-radius: 8px;
+	background: #f9f9f9;
+}
+
+.jmi-reporting-choice input {
+	margin-top: 3px;
+}
+
+.jmi-reporting-choice span,
+.jmi-reporting-choice small {
+	display: block;
+}
+
+.jmi-reporting-choice small {
+	margin-top: 5px;
+	color: #646970;
+	font-weight: 400;
+	line-height: 1.5;
+}
+
+.jmi-reporting-details {
+	margin-top: 18px;
+}
+
 .jmi-safety-note {
 	display: flex;
 	align-items: center;

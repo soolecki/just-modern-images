@@ -48,6 +48,14 @@ function jmi_uninstall_site() {
 			'jmi_capabilities',
 			'jmi_activity_log',
 			'jmi_data_revision',
+			'jmi_diagnostics_enabled',
+			'jmi_diagnostics_cron_metrics',
+			'jmi_diagnostics_initialized',
+			'jmi_diagnostics_installation_id',
+			'jmi_diagnostics_installation_secret',
+			'jmi_diagnostics_outbox',
+			'jmi_diagnostics_send_lock',
+			'jmi_diagnostics_state',
 			'jmi_format_health',
 			'jmi_quality_profile',
 			'jmi_queue_status',
@@ -76,6 +84,7 @@ function jmi_uninstall_site() {
 
 	wp_clear_scheduled_hook( 'jmi_process_attachment' );
 	wp_clear_scheduled_hook( 'jmi_scan_library' );
+	wp_clear_scheduled_hook( 'jmi_send_diagnostics' );
 }
 
 if ( is_multisite() ) {

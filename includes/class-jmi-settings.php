@@ -65,20 +65,29 @@ final class JMI_Settings {
 	private $activity_log;
 
 	/**
+	 * Optional private-test diagnostic sender.
+	 *
+	 * @var JMI_Diagnostics_Reporter|null
+	 */
+	private $reporter;
+
+	/**
 	 * Set up the settings screen.
 	 *
-	 * @param JMI_Quality_Profiles  $profiles     Quality profiles.
-	 * @param JMI_Capabilities      $capabilities Server capabilities.
-	 * @param JMI_Queue             $queue        Background queue.
-	 * @param JMI_Media_Status      $media_status Media Library status.
-	 * @param JMI_Activity_Log|null $activity_log Recent worker activity.
+	 * @param JMI_Quality_Profiles          $profiles     Quality profiles.
+	 * @param JMI_Capabilities              $capabilities Server capabilities.
+	 * @param JMI_Queue                     $queue        Background queue.
+	 * @param JMI_Media_Status              $media_status Media Library status.
+	 * @param JMI_Activity_Log|null         $activity_log Recent worker activity.
+	 * @param JMI_Diagnostics_Reporter|null $reporter     Private-test diagnostic sender.
 	 */
-	public function __construct( $profiles, $capabilities, $queue, $media_status, $activity_log = null ) {
+	public function __construct( $profiles, $capabilities, $queue, $media_status, $activity_log = null, $reporter = null ) {
 		$this->profiles     = $profiles;
 		$this->capabilities = $capabilities;
 		$this->queue        = $queue;
 		$this->media_status = $media_status;
 		$this->activity_log = $activity_log;
+		$this->reporter     = $reporter;
 		if ( ! $this->activity_log && class_exists( 'JMI_Activity_Log', false ) ) {
 			$this->activity_log = new JMI_Activity_Log();
 		}
@@ -95,6 +104,8 @@ final class JMI_Settings {
 		add_action( 'admin_post_jmi_rebuild', array( $this, 'handle_rebuild' ) );
 		add_action( 'admin_post_jmi_probe', array( $this, 'handle_probe' ) );
 		add_action( 'admin_post_jmi_export_activity', array( $this, 'handle_export_activity' ) );
+		add_action( 'admin_post_jmi_toggle_diagnostics', array( $this, 'handle_toggle_diagnostics' ) );
+		add_action( 'admin_post_jmi_send_diagnostics', array( $this, 'handle_send_diagnostics' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_styles' ) );
 		add_action( 'update_option_' . JMI_Quality_Profiles::OPTION_NAME, array( $this, 'handle_quality_change' ), 10, 2 );
 		add_filter( 'plugin_action_links_' . plugin_basename( JMI_PLUGIN_FILE ), array( $this, 'add_action_link' ) );
@@ -326,6 +337,7 @@ final class JMI_Settings {
 		$entries = $this->activity_log && method_exists( $this->activity_log, 'entries' )
 			? $this->activity_log->entries()
 			: array();
+		$this->render_remote_diagnostics();
 		?>
 		<section class="jmi-panel jmi-history-panel">
 			<div class="jmi-panel-heading">
@@ -451,6 +463,95 @@ final class JMI_Settings {
 	}
 
 	/**
+	 * Render the deliberately simple opt-in for privately tested sites.
+	 *
+	 * @return void
+	 */
+	private function render_remote_diagnostics() {
+		if ( ! $this->reporter || ! method_exists( $this->reporter, 'status' ) ) {
+			return;
+		}
+
+		$status       = $this->reporter->status();
+		$allowed      = ! empty( $status['allowed'] );
+		$configured   = ! empty( $status['configured'] );
+		$site_name    = (string) ( $status['site_name'] ?? get_bloginfo( 'name' ) );
+		$site_url     = (string) ( $status['site_url'] ?? home_url( '/' ) );
+		$last_success = (int) ( $status['last_success'] ?? 0 );
+		$last_attempt = (int) ( $status['last_attempt'] ?? 0 );
+		$cron         = is_array( $status['cron'] ?? null ) ? $status['cron'] : array();
+		$last_result  = ! empty( $status['last_error'] )
+			? (string) $status['last_error']
+			: ( $last_success ? 'sent' : 'waiting' );
+		?>
+		<section class="jmi-panel jmi-diagnostics-panel">
+			<div class="jmi-panel-heading">
+				<div>
+					<h2><?php esc_html_e( 'Test installation reporting', 'just-modern-images' ); ?></h2>
+					<p><?php esc_html_e( 'Share technical reports from this test installation to help find problems across multiple sites.', 'just-modern-images' ); ?></p>
+				</div>
+				<?php if ( $allowed && $configured ) : ?>
+					<span class="jmi-reporting-state jmi-reporting-state--on"><?php esc_html_e( 'Sending enabled', 'just-modern-images' ); ?></span>
+				<?php else : ?>
+					<span class="jmi-reporting-state"><?php esc_html_e( 'Sending disabled', 'just-modern-images' ); ?></span>
+				<?php endif; ?>
+			</div>
+
+			<?php if ( isset( $_GET['jmi-diagnostics'] ) ) : // phpcs:ignore WordPress.Security.NonceVerification.Recommended ?>
+				<?php $notice = sanitize_key( wp_unslash( $_GET['jmi-diagnostics'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended ?>
+				<div class="notice <?php echo 'sent' === $notice || 'saved' === $notice ? 'notice-success' : 'notice-warning'; ?> inline"><p>
+					<?php echo esc_html( $this->diagnostics_notice( $notice ) ); ?>
+				</p></div>
+			<?php endif; ?>
+
+			<form action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" method="post">
+				<input type="hidden" name="action" value="jmi_toggle_diagnostics">
+				<?php wp_nonce_field( 'jmi_toggle_diagnostics' ); ?>
+				<label class="jmi-reporting-choice">
+					<input type="checkbox" name="jmi_diagnostics_enabled" value="1" <?php checked( $allowed ); ?>>
+					<span>
+						<strong><?php esc_html_e( 'Send diagnostic data', 'just-modern-images' ); ?></strong>
+						<small><?php esc_html_e( 'Includes the site name and public homepage address, WordPress and PHP versions, image-format support, queue state, processing results, measured cron intervals, scheduling delay, processing speed, memory use, and redacted plugin errors.', 'just-modern-images' ); ?></small>
+						<small><?php esc_html_e( 'Images, Media Library filenames, visited page addresses, user details, and administrator credentials are never sent.', 'just-modern-images' ); ?></small>
+					</span>
+				</label>
+				<p class="description">
+					<?php esc_html_e( 'Site included in reports:', 'just-modern-images' ); ?>
+					<strong><?php echo esc_html( $site_name ); ?></strong>
+					<?php if ( $site_url ) : ?>
+						<a href="<?php echo esc_url( $site_url ); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html( $site_url ); ?></a>
+					<?php endif; ?>
+				</p>
+				<?php submit_button( __( 'Save reporting choice', 'just-modern-images' ), 'secondary', 'submit', false ); ?>
+			</form>
+
+			<?php if ( $allowed && ! $configured ) : ?>
+				<p class="jmi-warning"><?php esc_html_e( 'The diagnostic receiver has not been connected in this test build yet. No reports can leave the site.', 'just-modern-images' ); ?></p>
+			<?php endif; ?>
+
+			<?php if ( $configured ) : ?>
+				<dl class="jmi-details jmi-reporting-details">
+					<div><dt><?php esc_html_e( 'Receiver', 'just-modern-images' ); ?></dt><dd><code><?php echo esc_html( (string) ( $status['endpoint_host'] ?? '' ) ); ?></code></dd></div>
+					<div><dt><?php esc_html_e( 'Reports waiting', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( number_format_i18n( (int) ( $status['pending'] ?? 0 ) ) ); ?></dd></div>
+					<div><dt><?php esc_html_e( 'Last successful send', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $last_success ? $this->last_activity_label( $last_success ) : __( 'Not sent yet', 'just-modern-images' ) ); ?></dd></div>
+					<div><dt><?php esc_html_e( 'Last attempt', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $last_attempt ? $this->last_activity_label( $last_attempt ) : __( 'Not attempted yet', 'just-modern-images' ) ); ?></dd></div>
+					<div><dt><?php esc_html_e( 'Last sending result', 'just-modern-images' ); ?></dt><dd><code><?php echo esc_html( $last_result ); ?></code></dd></div>
+					<div><dt><?php esc_html_e( 'Last cron observation', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( ! empty( $cron['last_observed_at'] ) ? $this->last_activity_label( (int) $cron['last_observed_at'] ) : __( 'Not observed yet', 'just-modern-images' ) ); ?></dd></div>
+					<div><dt><?php esc_html_e( 'Average cron interval', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->milliseconds_label( (int) ( $cron['average_ms'] ?? 0 ) ) ); ?></dd></div>
+				</dl>
+				<?php if ( $allowed && (int) ( $status['pending'] ?? 0 ) > 0 ) : ?>
+					<form action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" method="post">
+						<input type="hidden" name="action" value="jmi_send_diagnostics">
+						<?php wp_nonce_field( 'jmi_send_diagnostics' ); ?>
+						<?php submit_button( __( 'Send waiting reports now', 'just-modern-images' ), 'secondary', 'submit', false ); ?>
+					</form>
+				<?php endif; ?>
+			<?php endif; ?>
+		</section>
+		<?php
+	}
+
+	/**
 	 * Queue a fresh scan after the quality profile changes.
 	 *
 	 * @param mixed $old_value Previous value.
@@ -536,6 +637,105 @@ final class JMI_Settings {
 		header( 'Content-Disposition: attachment; filename="just-modern-images-diagnostics-' . gmdate( 'Ymd-His' ) . '.json"' );
 		echo wp_json_encode( $report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
 		exit;
+	}
+
+	/**
+	 * Save the administrator's private-test reporting choice.
+	 *
+	 * @return void
+	 */
+	public function handle_toggle_diagnostics() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You are not allowed to perform this action.', 'just-modern-images' ) );
+		}
+
+		check_admin_referer( 'jmi_toggle_diagnostics' );
+		if ( ! $this->reporter || ! method_exists( $this->reporter, 'set_enabled' ) ) {
+			wp_die( esc_html__( 'Diagnostic reporting is not available on this server yet.', 'just-modern-images' ) );
+		}
+
+		$enabled = isset( $_POST['jmi_diagnostics_enabled'] ) && '1' === sanitize_key( wp_unslash( $_POST['jmi_diagnostics_enabled'] ) );
+		$entries = $this->activity_log && method_exists( $this->activity_log, 'entries' )
+			? $this->activity_log->entries()
+			: array();
+		$this->reporter->set_enabled( $enabled, $entries );
+
+		wp_safe_redirect(
+			add_query_arg(
+				array(
+					'tab'             => 'activity',
+					'jmi-diagnostics' => 'saved',
+				),
+				admin_url( 'options-general.php?page=' . self::PAGE_SLUG )
+			)
+		);
+		exit;
+	}
+
+	/**
+	 * Run one administrator-requested diagnostic send.
+	 *
+	 * @return void
+	 */
+	public function handle_send_diagnostics() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'You are not allowed to perform this action.', 'just-modern-images' ) );
+		}
+
+		check_admin_referer( 'jmi_send_diagnostics' );
+		$result = $this->reporter && method_exists( $this->reporter, 'send' )
+			? $this->reporter->send( true )
+			: 'disabled';
+
+		wp_safe_redirect(
+			add_query_arg(
+				array(
+					'tab'             => 'activity',
+					'jmi-diagnostics' => sanitize_key( $result ),
+				),
+				admin_url( 'options-general.php?page=' . self::PAGE_SLUG )
+			)
+		);
+		exit;
+	}
+
+	/**
+	 * Translate a diagnostic sender action result.
+	 *
+	 * @param string $result Stable sender result.
+	 * @return string
+	 */
+	private function diagnostics_notice( $result ) {
+		$messages = array(
+			'saved'    => __( 'The reporting choice has been saved.', 'just-modern-images' ),
+			'sent'     => __( 'The diagnostic report reached the receiver.', 'just-modern-images' ),
+			'empty'    => __( 'There were no reports waiting to be sent.', 'just-modern-images' ),
+			'failed'   => __( 'The receiver could not accept the report. It remains queued for another attempt.', 'just-modern-images' ),
+			'busy'     => __( 'Another request is sending reports. The queued data remains safe.', 'just-modern-images' ),
+			'deferred' => __( 'The report is waiting for its scheduled retry.', 'just-modern-images' ),
+			'disabled' => __( 'Diagnostic reporting is currently disabled.', 'just-modern-images' ),
+		);
+
+		return $messages[ $result ] ?? __( 'The diagnostic reporting state was refreshed.', 'just-modern-images' );
+	}
+
+	/**
+	 * Format a measured interval without implying a value when none exists.
+	 *
+	 * @param int $milliseconds Interval in milliseconds.
+	 * @return string
+	 */
+	private function milliseconds_label( $milliseconds ) {
+		$milliseconds = max( 0, (int) $milliseconds );
+		if ( $milliseconds < 1 ) {
+			return __( 'Not measured yet', 'just-modern-images' );
+		}
+
+		return sprintf(
+			/* translators: %s: interval in seconds. */
+			__( '%s seconds', 'just-modern-images' ),
+			number_format_i18n( $milliseconds / 1000, 1 )
+		);
 	}
 
 	/**
@@ -732,7 +932,7 @@ final class JMI_Settings {
 	private function server_summary() {
 		if ( method_exists( $this->capabilities, 'diagnostic_summary' ) ) {
 			$summary                   = $this->capabilities->diagnostic_summary();
-			$summary['rolling_update'] = version_compare( JMI_VERSION, '0.11.5', '<' );
+			$summary['rolling_update'] = version_compare( JMI_VERSION, '0.11.6', '<' );
 			return $summary;
 		}
 

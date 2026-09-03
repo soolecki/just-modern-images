@@ -388,6 +388,7 @@ final class JMI_Queue {
 				'last_worker_version'     => (string) $current['last_worker_version'],
 				'last_schedule_at'        => (int) $current['last_schedule_at'],
 				'last_schedule_result'    => (string) $current['last_schedule_result'],
+				'next_worker_due'         => 0,
 				'last_lock_contention_at' => (int) $current['last_lock_contention_at'],
 				'last_lock_recovery_at'   => (int) $current['last_lock_recovery_at'],
 			),
@@ -438,6 +439,10 @@ final class JMI_Queue {
 
 		$next_event = wp_next_scheduled( self::SCAN_HOOK );
 		if ( $next_event && (int) $next_event >= $now - self::SCHEDULE_GRACE ) {
+			if ( (int) ( $status['next_worker_due'] ?? 0 ) !== (int) $next_event ) {
+				$status['next_worker_due'] = (int) $next_event;
+				update_option( self::STATUS_OPTION, $status, false );
+			}
 			return;
 		}
 
@@ -466,12 +471,18 @@ final class JMI_Queue {
 		}
 
 		$this->start_request_budget();
-		$started_at             = microtime( true );
-		$status                 = $this->status();
+		$started_at                = microtime( true );
+		$status                    = $this->status();
+		$scheduled_for             = max( 0, (int) ( $status['next_worker_due'] ?? 0 ) );
+		$start_delay_ms            = $scheduled_for ? max( 0, (int) round( ( $started_at - $scheduled_for ) * 1000 ) ) : 0;
+		$status['next_worker_due'] = 0;
+		update_option( self::STATUS_OPTION, $status, false );
 		$cursor                 = isset( $status['cursor'] ) ? absint( $status['cursor'] ) : 0;
 		$page_size              = min( 100, max( 1, (int) apply_filters( 'jmi_scan_batch_size', 20 ) ) );
 		$max_items              = min( 100, max( 1, (int) apply_filters( 'jmi_worker_max_items', 50 ) ) );
 		$time_budget            = $this->worker_time_budget( $started_at );
+		$memory_limit           = $this->memory_limit_bytes();
+		$memory_started         = memory_get_usage( true );
 		$memory_threshold       = min( 0.95, max( 0.5, (float) apply_filters( 'jmi_worker_memory_threshold', 0.8 ) ) );
 		$attempts               = 0;
 		$processed              = 0;
@@ -556,6 +567,12 @@ final class JMI_Queue {
 							'complete'       => $complete,
 							'attempts'       => $attempts,
 							'processed'      => $processed,
+							'scheduled_for'  => $scheduled_for,
+							'start_delay_ms' => $start_delay_ms,
+							'time_budget_ms' => max( 0, (int) round( $time_budget * 1000 ) ),
+							'memory_start'   => max( 0, (int) $memory_started ),
+							'memory_peak'    => max( 0, (int) memory_get_peak_usage( true ) ),
+							'memory_limit'   => max( 0, (int) $memory_limit ),
 							'before'         => $run_before,
 							'after'          => $this->safe_activity_snapshot(),
 							'items'          => $this->active_run_items,
@@ -730,8 +747,9 @@ final class JMI_Queue {
 	 */
 	private function schedule_scan( $delay ) {
 		if ( ! wp_next_scheduled( self::SCAN_HOOK ) ) {
-			$scheduled = wp_schedule_single_event( time() + max( 1, (int) $delay ), self::SCAN_HOOK, array(), true );
-			$succeeded = ! is_wp_error( $scheduled ) && false !== $scheduled;
+			$scheduled_for = time() + max( 1, (int) $delay );
+			$scheduled     = wp_schedule_single_event( $scheduled_for, self::SCAN_HOOK, array(), true );
+			$succeeded     = ! is_wp_error( $scheduled ) && false !== $scheduled;
 			if ( ! $succeeded && wp_next_scheduled( self::SCAN_HOOK ) ) {
 				// Another request may have restored the same event concurrently.
 				$succeeded = true;
@@ -740,6 +758,7 @@ final class JMI_Queue {
 
 			$status['last_schedule_at']     = time();
 			$status['last_schedule_result'] = $succeeded ? 'scheduled' : 'failed';
+			$status['next_worker_due']      = $succeeded ? $scheduled_for : 0;
 			if ( ! $succeeded ) {
 				$status['last_reason'] = 'schedule_failed';
 			}
@@ -824,6 +843,7 @@ final class JMI_Queue {
 			'last_worker_version'     => '',
 			'last_schedule_at'        => 0,
 			'last_schedule_result'    => '',
+			'next_worker_due'         => 0,
 			'last_lock_contention_at' => 0,
 			'last_lock_recovery_at'   => 0,
 		);
