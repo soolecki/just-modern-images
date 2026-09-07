@@ -107,4 +107,26 @@ final class MediaStatusTest extends TestCase {
 		$this->assertSame( 'ready', $processing['queued_from'] );
 		$this->assertSame( 'demand', $processing['queue_source'] );
 	}
+
+	public function test_a_safe_previous_variant_settles_after_bounded_retries(): void {
+		$status = new JMI_Media_Status();
+
+		for ( $attempt = 1; $attempt <= JMI_Media_Status::AUTOMATIC_RETRIES; ++$attempt ) {
+			$status->record_result(
+				15,
+				'v1:standard',
+				array(
+					'state'       => 'stale',
+					'failed'      => 1,
+					'last_reason' => 'encode_failed',
+				)
+			);
+		}
+
+		$settled = $status->get( 15, 'v1:standard' );
+		$this->assertSame( 'partial', $settled['state'] );
+		$this->assertSame( JMI_Media_Status::AUTOMATIC_RETRIES, $settled['failure_count'] );
+		$this->assertSame( 0, $settled['retry_after'] );
+		$this->assertFalse( $status->needs_processing( 15, 'v1:standard' ) );
+	}
 }

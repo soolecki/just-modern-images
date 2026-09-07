@@ -3,7 +3,7 @@ Tags: webp, avif, images, performance, optimization
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.12.1
+Stable tag: 0.12.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -65,7 +65,9 @@ If a one-time worker event disappears after an interrupted PHP request, the plug
 
 Network activation initializes an independent queue for every multisite site and automatically prepares sites added later. When an external cron runner is used, it must call every public site in the network because WordPress stores cron events per site.
 
-Generated files use short immutable names in the same directory as their sources. Publishing verifies the complete file and tolerates short sharing delays, which makes the process safer on Windows, IIS, and SMB-backed uploads.
+Generated files use bounded immutable names in the same directory as their sources. Publishing verifies the complete file and tolerates short sharing delays, which makes the process safer on Windows, IIS, and SMB-backed uploads.
+
+Generated filenames keep the recognizable source filename followed by a `jmi` marker and an immutable token. Exceptionally long names are shortened only as much as necessary to stay within conservative Windows and SMB path limits.
 
 == Frequently Asked Questions ==
 
@@ -106,6 +108,19 @@ The plugin uses normal WordPress upload URLs and provides a filter for CDN integ
 Not in this release. The first release intentionally covers attachment images rendered through standard WordPress APIs without buffering or rewriting the entire page.
 
 == Changelog ==
+
+= 0.12.2 =
+
+* Replaced the competing ready and reviewed percentages with one processing progress that reaches 100% only when no images are waiting.
+* Made every result visible in four totals that add up to the whole library: optimized, safe fallback, waiting, and needs attention.
+* Added automatic live updates for the overview and all background-worker details while the settings page remains open.
+* Moved technical background-processing details into a compact collapsible panel with a plain-language summary.
+* Stopped persistent stale variants from restarting full Media Library scans indefinitely.
+* Added bounded per-image retries with backoff and recovery of missing retry events.
+* Left normally scheduled WP-Cron events to WordPress instead of counting every due event as an automatic recovery.
+* Ensured a data migration requested during an active scan starts one complete follow-up scan instead of being lost or repeatedly resetting current work.
+* Restored recognizable filenames in the form `original-name.jpg.jmi-token.avif`, with safe truncation for Windows and SMB paths.
+* Queued one full migration so existing short-name variants are replaced without removing a working file before its successor is ready.
 
 = 0.12.1 =
 

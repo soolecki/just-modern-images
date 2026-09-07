@@ -106,9 +106,28 @@ final class JMI_Settings {
 		add_action( 'admin_post_jmi_export_activity', array( $this, 'handle_export_activity' ) );
 		add_action( 'admin_post_jmi_toggle_diagnostics', array( $this, 'handle_toggle_diagnostics' ) );
 		add_action( 'admin_post_jmi_send_diagnostics', array( $this, 'handle_send_diagnostics' ) );
+		add_action( 'wp_ajax_jmi_status', array( $this, 'ajax_status' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_styles' ) );
 		add_action( 'update_option_' . JMI_Quality_Profiles::OPTION_NAME, array( $this, 'handle_quality_change' ), 10, 2 );
 		add_filter( 'plugin_action_links_' . plugin_basename( JMI_PLUGIN_FILE ), array( $this, 'add_action_link' ) );
+	}
+
+	/**
+	 * Return current progress to an open settings screen.
+	 *
+	 * @return void
+	 */
+	public function ajax_status() {
+		check_ajax_referer( 'jmi_live_status', 'nonce' );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_send_json_error( array( 'message' => __( 'You are not allowed to view this status.', 'just-modern-images' ) ), 403 );
+		}
+
+		$status      = $this->queue->status();
+		$stats       = $this->media_status->library_stats( $this->profiles->generation_profile() );
+		$diagnostics = method_exists( $this->queue, 'diagnostics' ) ? $this->queue->diagnostics() : array();
+
+		wp_send_json_success( $this->live_status( $stats, $status, $diagnostics ) );
 	}
 
 	/**
@@ -163,11 +182,6 @@ final class JMI_Settings {
 		$stats               = $this->media_status->library_stats( $this->profiles->generation_profile() );
 		$profiles            = $this->profiles->all();
 		$profile             = $profiles[ $selected ];
-		$ready_pct           = $stats['total'] ? (int) round( ( $stats['ready'] / $stats['total'] ) * 100 ) : 0;
-		$reviewed_pct        = $stats['total'] ? (int) round( ( $stats['reviewed'] / $stats['total'] ) * 100 ) : 0;
-		$waiting_count       = (int) $stats['pending'] + (int) $stats['queued'] + (int) $stats['processing'] + (int) $stats['stale'];
-		$processing_active   = $waiting_count > 0 && in_array( $status['status'], array( 'queued', 'running' ), true );
-		$encoders_paused     = 'encoder_paused' === sanitize_key( $status['last_worker_stop'] ?? '' );
 		$last_reason         = sanitize_key( $status['last_reason'] ?? '' );
 		$worker_diagnostics  = method_exists( $this->queue, 'diagnostics' )
 			? $this->queue->diagnostics()
@@ -176,6 +190,9 @@ final class JMI_Settings {
 				'lock_state' => 'unknown',
 				'lock_age'   => 0,
 			);
+		$live_status         = $this->live_status( $stats, $status, $worker_diagnostics );
+		$processing_active   = ! empty( $live_status['active'] );
+		$encoders_paused     = 'paused' === $live_status['mode'];
 		$scan_started_at     = ! empty( $status['scan_started_at'] )
 			? (int) $status['scan_started_at']
 			: (int) $status['last_update'];
@@ -185,7 +202,7 @@ final class JMI_Settings {
 			$scan_started_at < time() - 5 * MINUTE_IN_SECONDS;
 		$attention_media_url = add_query_arg( 'jmi-status', 'attention', admin_url( 'upload.php?mode=list' ) );
 		?>
-		<div class="wrap jmi-admin">
+		<div class="wrap jmi-admin" data-jmi-live data-jmi-mode="<?php echo esc_attr( $live_status['mode'] ); ?>">
 			<div class="jmi-heading">
 				<div>
 					<h1><?php esc_html_e( 'Just Modern Images', 'just-modern-images' ); ?></h1>
@@ -223,57 +240,43 @@ final class JMI_Settings {
 				<div class="notice notice-error"><p><?php esc_html_e( 'WordPress rejected the background worker event. The plugin will retry scheduling it on the next request.', 'just-modern-images' ); ?></p></div>
 			<?php endif; ?>
 
-			<?php if ( $stats['failed'] ) : ?>
-				<div class="jmi-alert">
+			<div class="jmi-alert" data-jmi-attention<?php echo $stats['failed'] ? '' : ' hidden'; ?>>
 					<div>
-						<strong>
-							<?php /* translators: %s: number of media items needing attention. */ ?>
-							<?php echo esc_html( sprintf( _n( '%s image needs attention.', '%s images need attention.', $stats['failed'], 'just-modern-images' ), number_format_i18n( $stats['failed'] ) ) ); ?>
-						</strong>
-						<?php if ( $last_reason ) : ?>
-							<span><?php echo esc_html( $this->diagnostic_label( $last_reason ) ); ?> <code><?php echo esc_html( $last_reason ); ?></code></span>
-						<?php endif; ?>
+						<strong data-jmi-attention-title><?php echo esc_html( $live_status['attention_title'] ); ?></strong>
+						<span data-jmi-attention-reason<?php echo $last_reason ? '' : ' hidden'; ?>><span data-jmi-attention-message><?php echo esc_html( $last_reason ? $this->diagnostic_label( $last_reason ) : '' ); ?></span> <code data-jmi-attention-code><?php echo esc_html( $last_reason ); ?></code></span>
 					</div>
 					<a class="button" href="<?php echo esc_url( $attention_media_url ); ?>"><?php esc_html_e( 'Review images', 'just-modern-images' ); ?></a>
-				</div>
-			<?php endif; ?>
+			</div>
 
-			<?php if ( $processing_active ) : ?>
-				<section class="jmi-processing<?php echo $encoders_paused ? ' jmi-processing--paused' : ''; ?>" role="status" aria-live="polite">
+			<section class="jmi-processing<?php echo $encoders_paused ? ' jmi-processing--paused' : ''; ?>" data-jmi-processing role="status" aria-live="polite"<?php echo $processing_active ? '' : ' hidden'; ?>>
 					<div class="jmi-processing-copy">
 						<span class="jmi-processing-icon" aria-hidden="true"></span>
 						<div>
-							<strong><?php echo esc_html( $encoders_paused ? __( 'Processing will resume automatically', 'just-modern-images' ) : __( 'Images are being processed', 'just-modern-images' ) ); ?></strong>
-							<span><?php echo esc_html( $encoders_paused ? __( 'The image encoders are cooling down after repeated failures. Existing modern files remain active.', 'just-modern-images' ) : __( 'Work continues safely in the background. You can leave this page.', 'just-modern-images' ) ); ?></span>
+							<strong data-jmi-processing-title><?php echo esc_html( $live_status['title'] ); ?></strong>
+							<span data-jmi-processing-detail><?php echo esc_html( $live_status['detail'] ); ?></span>
 						</div>
 					</div>
-					<span class="jmi-processing-count">
-						<?php /* translators: %s: number of images waiting for background processing. */ ?>
-						<?php echo esc_html( sprintf( _n( '%s image waiting', '%s images waiting', $waiting_count, 'just-modern-images' ), number_format_i18n( $waiting_count ) ) ); ?>
-					</span>
+					<div class="jmi-processing-meta"><span class="jmi-processing-count" data-jmi-processing-count><?php echo esc_html( $live_status['waiting_label'] ); ?></span><small data-jmi-processing-activity><?php echo esc_html( $live_status['activity_label'] ); ?></small></div>
 					<div class="jmi-indeterminate-progress" role="progressbar" aria-label="<?php esc_attr_e( 'Background image processing', 'just-modern-images' ); ?>"><span></span></div>
-				</section>
-			<?php endif; ?>
+			</section>
 
-			<section class="jmi-overview"<?php echo $processing_active ? ' aria-busy="true"' : ''; ?>>
-				<div class="jmi-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="<?php echo esc_attr( $ready_pct ); ?>" style="--jmi-progress: <?php echo esc_attr( $ready_pct ); ?>%">
-					<div><strong><?php echo esc_html( $ready_pct . '%' ); ?></strong><span><?php esc_html_e( 'ready', 'just-modern-images' ); ?></span></div>
+			<section class="jmi-overview" data-jmi-overview<?php echo $processing_active ? ' aria-busy="true"' : ''; ?>>
+				<div class="jmi-progress" data-jmi-progress role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="<?php echo esc_attr( $live_status['progress_pct'] ); ?>" style="--jmi-progress: <?php echo esc_attr( $live_status['progress_pct'] ); ?>%">
+					<div><strong data-jmi-progress-pct><?php echo esc_html( $live_status['progress_pct'] . '%' ); ?></strong><span data-jmi-progress-label><?php echo esc_html( $live_status['progress_label'] ); ?></span></div>
 				</div>
 				<div class="jmi-overview-copy">
 					<h2><?php esc_html_e( 'Media Library', 'just-modern-images' ); ?></h2>
-					<?php /* translators: 1: ready images, 2: all eligible images. */ ?>
-					<p><?php echo esc_html( sprintf( __( '%1$s of %2$s eligible images are fully ready.', 'just-modern-images' ), number_format_i18n( $stats['ready'] ), number_format_i18n( $stats['total'] ) ) ); ?></p>
-					<div class="jmi-linear-progress"><span style="width: <?php echo esc_attr( $reviewed_pct ); ?>%"></span></div>
-					<?php /* translators: %s: percentage of the Media Library reviewed. */ ?>
-					<small><?php echo esc_html( sprintf( __( 'Library reviewed: %s%%', 'just-modern-images' ), $reviewed_pct ) ); ?></small>
+					<p data-jmi-library-message><?php echo esc_html( $live_status['library_message'] ); ?></p>
+					<div class="jmi-linear-progress"><span data-jmi-progress-bar style="width: <?php echo esc_attr( $live_status['progress_pct'] ); ?>%"></span></div>
+					<small data-jmi-outcome-message><?php echo esc_html( $live_status['outcome_message'] ); ?></small>
 				</div>
 			</section>
 
 			<div class="jmi-stat-grid">
-				<div class="jmi-stat"><span><?php esc_html_e( 'Ready', 'just-modern-images' ); ?></span><strong><?php echo esc_html( number_format_i18n( $stats['ready'] ) ); ?></strong></div>
-				<div class="jmi-stat"><span><?php esc_html_e( 'Partly ready', 'just-modern-images' ); ?></span><strong><?php echo esc_html( number_format_i18n( $stats['partial'] ) ); ?></strong></div>
-				<div class="jmi-stat"><span><?php esc_html_e( 'Waiting', 'just-modern-images' ); ?></span><strong><?php echo esc_html( number_format_i18n( $waiting_count ) ); ?></strong></div>
-				<div class="jmi-stat jmi-stat--danger"><span><?php esc_html_e( 'Needs attention', 'just-modern-images' ); ?></span><strong><?php echo esc_html( number_format_i18n( $stats['failed'] ) ); ?></strong></div>
+				<div class="jmi-stat"><span><?php esc_html_e( 'Optimized', 'just-modern-images' ); ?></span><strong data-jmi-count="ready"><?php echo esc_html( $live_status['counts']['ready'] ); ?></strong></div>
+				<div class="jmi-stat jmi-stat--fallback"><span><b><?php esc_html_e( 'Safe fallback', 'just-modern-images' ); ?></b><small data-jmi-fallback-detail><?php echo esc_html( $live_status['fallback_detail'] ); ?></small></span><strong data-jmi-count="fallback"><?php echo esc_html( $live_status['counts']['fallback'] ); ?></strong></div>
+				<div class="jmi-stat"><span><?php esc_html_e( 'Waiting', 'just-modern-images' ); ?></span><strong data-jmi-count="waiting"><?php echo esc_html( $live_status['counts']['waiting'] ); ?></strong></div>
+				<div class="jmi-stat jmi-stat--danger"><span><?php esc_html_e( 'Needs attention', 'just-modern-images' ); ?></span><strong data-jmi-count="failed"><?php echo esc_html( $live_status['counts']['failed'] ); ?></strong></div>
 			</div>
 
 			<div class="jmi-panel-grid">
@@ -314,26 +317,24 @@ final class JMI_Settings {
 					</form>
 				</section>
 
-				<section class="jmi-panel">
-					<h2><?php esc_html_e( 'Background processing', 'just-modern-images' ); ?></h2>
+				<details class="jmi-panel jmi-background-panel">
+					<summary>
+						<span><strong><?php esc_html_e( 'Background processing', 'just-modern-images' ); ?></strong><small data-jmi-background-summary><?php echo esc_html( $live_status['background_summary'] ); ?></small></span>
+						<span class="jmi-background-meta" data-jmi-background-meta><?php echo esc_html( $live_status['background_meta'] ); ?></span>
+					</summary>
+					<div class="jmi-background-body">
 					<dl class="jmi-details">
-						<div><dt><?php esc_html_e( 'Library scan', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->queue_status_label( $status['status'] ) ); ?></dd></div>
-						<div><dt><?php esc_html_e( 'Attachments processed', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( number_format_i18n( (int) $status['processed'] ) ); ?></dd></div>
-						<div><dt><?php esc_html_e( 'Files generated', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( number_format_i18n( (int) $status['generated'] ) ); ?></dd></div>
-						<div><dt><?php esc_html_e( 'Last cron workload', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->worker_run_label( $status ) ); ?></dd></div>
-						<div><dt><?php esc_html_e( 'Worker paused because', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->worker_stop_label( $status['last_worker_stop'] ?? '' ) ); ?></dd></div>
-						<div><dt><?php esc_html_e( 'Next worker event', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->worker_event_label( $worker_diagnostics, $status['status'] ) ); ?></dd></div>
-						<div><dt><?php esc_html_e( 'Worker lock', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->worker_lock_label( $worker_diagnostics ) ); ?></dd></div>
-						<div><dt><?php esc_html_e( 'Worker code', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->worker_version_label( $status['last_worker_version'] ?? '' ) ); ?></dd></div>
-						<?php if ( ! empty( $status['recovery_count'] ) ) : ?>
-							<div><dt><?php esc_html_e( 'Automatic recoveries', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( number_format_i18n( (int) $status['recovery_count'] ) ); ?> <code><?php echo esc_html( sanitize_key( $status['last_recovery_reason'] ?? '' ) ); ?></code></dd></div>
-						<?php endif; ?>
-						<div><dt><?php esc_html_e( 'Last activity', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $this->last_activity_label( $status['last_update'] ) ); ?></dd></div>
-						<div><dt><?php esc_html_e( 'Last result', 'just-modern-images' ); ?></dt><dd><?php echo esc_html( $last_reason ? $this->diagnostic_label( $last_reason ) : __( 'No issues recorded', 'just-modern-images' ) ); ?>
-						<?php
-						if ( $last_reason ) :
-							?>
-							<code><?php echo esc_html( $last_reason ); ?></code><?php endif; ?></dd></div>
+						<div><dt><?php esc_html_e( 'Library scan', 'just-modern-images' ); ?></dt><dd data-jmi-background="queue_status"><?php echo esc_html( $live_status['background']['queue_status'] ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Attachments processed', 'just-modern-images' ); ?></dt><dd data-jmi-background="processed"><?php echo esc_html( $live_status['background']['processed'] ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Files generated', 'just-modern-images' ); ?></dt><dd data-jmi-background="generated"><?php echo esc_html( $live_status['background']['generated'] ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Last cron workload', 'just-modern-images' ); ?></dt><dd data-jmi-background="worker_run"><?php echo esc_html( $live_status['background']['worker_run'] ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Worker paused because', 'just-modern-images' ); ?></dt><dd data-jmi-background="worker_stop"><?php echo esc_html( $live_status['background']['worker_stop'] ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Next worker event', 'just-modern-images' ); ?></dt><dd data-jmi-background="next_event"><?php echo esc_html( $live_status['background']['next_event'] ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Worker lock', 'just-modern-images' ); ?></dt><dd data-jmi-background="lock"><?php echo esc_html( $live_status['background']['lock'] ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Worker code', 'just-modern-images' ); ?></dt><dd data-jmi-background="worker_version"><?php echo esc_html( $live_status['background']['worker_version'] ); ?></dd></div>
+						<div data-jmi-recoveries<?php echo empty( $status['recovery_count'] ) ? ' hidden' : ''; ?>><dt><?php esc_html_e( 'Automatic recoveries', 'just-modern-images' ); ?></dt><dd><span data-jmi-background="recoveries"><?php echo esc_html( $live_status['background']['recoveries'] ); ?></span> <code data-jmi-background="recovery_reason"><?php echo esc_html( $live_status['background']['recovery_reason'] ); ?></code></dd></div>
+						<div><dt><?php esc_html_e( 'Last activity', 'just-modern-images' ); ?></dt><dd data-jmi-background="last_activity"><?php echo esc_html( $live_status['background']['last_activity'] ); ?></dd></div>
+						<div><dt><?php esc_html_e( 'Last result', 'just-modern-images' ); ?></dt><dd><span data-jmi-background="last_result"><?php echo esc_html( $live_status['background']['last_result'] ); ?></span> <code data-jmi-background="last_reason"<?php echo $last_reason ? '' : ' hidden'; ?>><?php echo esc_html( $last_reason ); ?></code></dd></div>
 					</dl>
 					<?php if ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON ) : ?>
 						<p class="jmi-warning"><?php echo esc_html( is_multisite() ? __( 'Built-in WP-Cron is disabled. The external runner must call every site in this network regularly; each site has its own safe processing queue.', 'just-modern-images' ) : __( 'Built-in WP-Cron is disabled, so an external runner must call WordPress regularly. If Last activity keeps changing, the runner is working.', 'just-modern-images' ) ); ?></p>
@@ -343,7 +344,8 @@ final class JMI_Settings {
 						<?php wp_nonce_field( 'jmi_rebuild_media_library' ); ?>
 						<?php submit_button( __( 'Scan Media Library again', 'just-modern-images' ), 'secondary', 'submit', false ); ?>
 					</form>
-				</section>
+					</div>
+				</details>
 			</div>
 
 			<p class="jmi-safety-note"><span aria-hidden="true">✓</span><?php esc_html_e( 'Original JPEG and PNG files are never replaced or deleted.', 'just-modern-images' ); ?></p>
@@ -788,6 +790,15 @@ final class JMI_Settings {
 		}
 
 		wp_enqueue_style( 'jmi-admin', plugins_url( 'assets/admin.css', JMI_PLUGIN_FILE ), array(), JMI_VERSION );
+		wp_enqueue_script( 'jmi-admin', plugins_url( 'assets/admin.js', JMI_PLUGIN_FILE ), array(), JMI_VERSION, true );
+		wp_localize_script(
+			'jmi-admin',
+			'jmiAdminStatus',
+			array(
+				'url'   => admin_url( 'admin-ajax.php' ),
+				'nonce' => wp_create_nonce( 'jmi_live_status' ),
+			)
+		);
 	}
 
 	/**
@@ -829,6 +840,160 @@ final class JMI_Settings {
 		}
 
 		return $detail;
+	}
+
+	/**
+	 * Build one consistent answer about whether background work has finished.
+	 *
+	 * @param array<string, int>   $stats       Library statistics.
+	 * @param array<string, mixed> $status      Queue status.
+	 * @param array<string, mixed> $diagnostics Worker diagnostics.
+	 * @return array<string, mixed>
+	 */
+	private function live_status( $stats, $status, $diagnostics ) {
+		$total     = max( 0, (int) ( $stats['total'] ?? 0 ) );
+		$ready     = max( 0, (int) ( $stats['ready'] ?? 0 ) );
+		$partial   = max( 0, (int) ( $stats['partial'] ?? 0 ) );
+		$skipped   = max( 0, (int) ( $stats['skipped'] ?? 0 ) );
+		$failed    = max( 0, (int) ( $stats['failed'] ?? 0 ) );
+		$waiting   = max( 0, (int) ( $stats['pending'] ?? 0 ) + (int) ( $stats['queued'] ?? 0 ) + (int) ( $stats['processing'] ?? 0 ) + (int) ( $stats['stale'] ?? 0 ) );
+		$fallback  = $partial + $skipped;
+		$processed = min( $total, $ready + $fallback + $failed );
+		$progress  = $total > 0 ? (int) floor( ( $processed / $total ) * 100 ) : 100;
+
+		if ( $waiting > 0 ) {
+			$progress = min( 99, $progress );
+		} else {
+			$progress = 100;
+		}
+
+		$queue_state = sanitize_key( $status['status'] ?? 'idle' );
+		$paused      = 'encoder_paused' === sanitize_key( $status['last_worker_stop'] ?? '' );
+		if ( $waiting > 0 && $paused ) {
+			$mode = 'paused';
+		} elseif ( $waiting > 0 && in_array( $queue_state, array( 'queued', 'running' ), true ) ) {
+			$mode = 'processing';
+		} elseif ( $waiting > 0 ) {
+			$mode = 'waiting';
+		} elseif ( $failed > 0 ) {
+			$mode = 'attention';
+		} else {
+			$mode = 'complete';
+		}
+
+		$activity_label = $this->last_activity_label( $status['last_update'] ?? 0 );
+		$waiting_label  = sprintf(
+			/* translators: %s: number of images waiting for background processing. */
+			_n( '%s image remaining', '%s images remaining', $waiting, 'just-modern-images' ),
+			number_format_i18n( $waiting )
+		);
+		$attention_title = sprintf(
+			/* translators: %s: number of media items needing attention. */
+			_n( '%s image needs attention.', '%s images need attention.', $failed, 'just-modern-images' ),
+			number_format_i18n( $failed )
+		);
+
+		if ( 'paused' === $mode ) {
+			$title  = __( 'Processing will resume automatically', 'just-modern-images' );
+			$detail = __( 'The image encoders are cooling down. Existing safe files remain active.', 'just-modern-images' );
+		} elseif ( 'waiting' === $mode ) {
+			$title  = __( 'Waiting for the next background run', 'just-modern-images' );
+			$detail = __( 'WordPress will continue automatically. You can leave this page.', 'just-modern-images' );
+		} else {
+			$title  = __( 'Images are being processed', 'just-modern-images' );
+			$detail = __( 'Work continues safely in the background. You can leave this page.', 'just-modern-images' );
+		}
+
+		if ( $waiting > 0 ) {
+			$library_message = sprintf(
+				/* translators: 1: checked images, 2: all eligible images, 3: remaining images. */
+				__( '%1$s of %2$s images checked. %3$s remaining.', 'just-modern-images' ),
+				number_format_i18n( $processed ),
+				number_format_i18n( $total ),
+				number_format_i18n( $waiting )
+			);
+		} elseif ( $failed > 0 ) {
+			$library_message = sprintf(
+				/* translators: 1: all eligible images, 2: images needing attention. */
+				__( 'All %1$s images have been checked. %2$s need attention.', 'just-modern-images' ),
+				number_format_i18n( $total ),
+				number_format_i18n( $failed )
+			);
+		} elseif ( $total > 0 ) {
+			$library_message = sprintf(
+				/* translators: %s: number of eligible images. */
+				__( 'Finished. All %s eligible images have been checked.', 'just-modern-images' ),
+				number_format_i18n( $total )
+			);
+		} else {
+			$library_message = __( 'Finished. There are no eligible images to process.', 'just-modern-images' );
+		}
+
+		$outcome_message = sprintf(
+			/* translators: 1: fully optimized images, 2: images completed with a safe fallback. */
+			__( '%1$s fully optimized. %2$s completed with a safe fallback.', 'just-modern-images' ),
+			number_format_i18n( $ready ),
+			number_format_i18n( $fallback )
+		);
+		$fallback_detail = sprintf(
+			/* translators: 1: partly optimized images, 2: images using the original. */
+			__( '%1$s partial, %2$s original', 'just-modern-images' ),
+			number_format_i18n( $partial ),
+			number_format_i18n( $skipped )
+		);
+
+		$background_summary = 'complete' === $mode
+			? __( 'Finished — all images checked', 'just-modern-images' )
+			: ( 'attention' === $mode ? __( 'Finished — some images need attention', 'just-modern-images' ) : $title );
+		$background_meta    = 'complete' === $mode || 'attention' === $mode
+			? $activity_label
+			: $waiting_label . ' · ' . $activity_label;
+		$next_event         = $this->worker_event_label( $diagnostics, $queue_state );
+		if ( $waiting > 0 && 'complete' === $queue_state ) {
+			$next_event = __( 'Waiting for an image retry or the next cron call', 'just-modern-images' );
+		}
+
+		$last_reason = sanitize_key( $status['last_reason'] ?? '' );
+
+		return array(
+			'mode'               => $mode,
+			'active'             => in_array( $mode, array( 'processing', 'waiting', 'paused' ), true ),
+			'progress_pct'       => $progress,
+			'progress_label'     => in_array( $mode, array( 'complete', 'attention' ), true ) ? __( 'complete', 'just-modern-images' ) : __( 'processed', 'just-modern-images' ),
+			'title'              => $title,
+			'detail'             => $detail,
+			'waiting_label'      => $waiting_label,
+			'activity_label'     => $activity_label,
+			'library_message'    => $library_message,
+			'outcome_message'    => $outcome_message,
+			'fallback_detail'    => $fallback_detail,
+			'attention_title'    => $attention_title,
+			'attention_reason'   => $last_reason ? $this->diagnostic_label( $last_reason ) : '',
+			'attention_code'     => $last_reason,
+			'background_summary' => $background_summary,
+			'background_meta'    => $background_meta,
+			'counts'             => array(
+				'ready'    => number_format_i18n( $ready ),
+				'fallback' => number_format_i18n( $fallback ),
+				'waiting'  => number_format_i18n( $waiting ),
+				'failed'   => number_format_i18n( $failed ),
+			),
+			'background'         => array(
+				'queue_status'    => $this->queue_status_label( $queue_state ),
+				'processed'       => number_format_i18n( (int) ( $status['processed'] ?? 0 ) ),
+				'generated'       => number_format_i18n( (int) ( $status['generated'] ?? 0 ) ),
+				'worker_run'      => $this->worker_run_label( $status ),
+				'worker_stop'     => $this->worker_stop_label( $status['last_worker_stop'] ?? '' ),
+				'next_event'      => $next_event,
+				'lock'            => $this->worker_lock_label( $diagnostics ),
+				'worker_version'  => $this->worker_version_label( $status['last_worker_version'] ?? '' ),
+				'recoveries'      => number_format_i18n( (int) ( $status['recovery_count'] ?? 0 ) ),
+				'recovery_reason' => sanitize_key( $status['last_recovery_reason'] ?? '' ),
+				'last_activity'   => $activity_label,
+				'last_result'     => $last_reason ? $this->diagnostic_label( $last_reason ) : __( 'No issues recorded', 'just-modern-images' ),
+				'last_reason'     => $last_reason,
+			),
+		);
 	}
 
 	/**

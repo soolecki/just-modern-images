@@ -122,7 +122,7 @@ final class JMI_Quality_Profiles {
 		$profile  = $profiles[ $this->selected_key() ];
 
 		return sprintf(
-			'v1:%s:webp-%d:avif-%d',
+			'v2:%s:webp-%d:avif-%d',
 			$this->selected_key(),
 			(int) $profile['webp'],
 			(int) $profile['avif']

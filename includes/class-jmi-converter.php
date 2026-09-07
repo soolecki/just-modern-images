@@ -14,6 +14,10 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class JMI_Converter {
 
+	const FILENAME_REVISION = 2;
+	const MAX_STEM_BYTES    = 140;
+	const MAX_PATH_BYTES    = 240;
+
 	/**
 	 * Quality profile provider.
 	 *
@@ -353,7 +357,7 @@ final class JMI_Converter {
 	}
 
 	/**
-	 * Build short immutable filenames that remain safe on Windows and SMB.
+	 * Build readable immutable filenames that remain safe on Windows and SMB.
 	 *
 	 * @param array<string, mixed> $source    Source data.
 	 * @param string               $token     Variant token.
@@ -361,7 +365,14 @@ final class JMI_Converter {
 	 * @return array<string, string>
 	 */
 	private function variant_paths( $source, $token, $extension ) {
-		$filename           = 'jmi-' . $token . '.' . $extension;
+		$suffix             = '.jmi-' . $token . '.' . $extension;
+		$source_filename    = basename( wp_normalize_path( $source['relative_path'] ) );
+		$source_name        = sanitize_file_name( $source_filename );
+		$directory          = dirname( $source['path'] );
+		$available_by_path  = self::MAX_PATH_BYTES - strlen( $directory ) - strlen( DIRECTORY_SEPARATOR ) - strlen( $suffix );
+		$name_limit         = min( self::MAX_STEM_BYTES, 255 - strlen( $suffix ), $available_by_path );
+		$readable_name      = $this->truncate_source_name( $source_name, $name_limit );
+		$filename           = $readable_name ? $readable_name . $suffix : 'jmi-' . $token . '.' . $extension;
 		$relative_directory = dirname( wp_normalize_path( $source['relative_path'] ) );
 		$relative_path      = '.' === $relative_directory ? $filename : trailingslashit( $relative_directory ) . $filename;
 
@@ -369,6 +380,31 @@ final class JMI_Converter {
 			'absolute' => dirname( $source['path'] ) . DIRECTORY_SEPARATOR . $filename,
 			'relative' => $relative_path,
 		);
+	}
+
+	/**
+	 * Shorten a source filename without leaving a broken UTF-8 sequence.
+	 *
+	 * @param string $name  Sanitized source filename.
+	 * @param int    $limit Maximum number of bytes available.
+	 * @return string
+	 */
+	private function truncate_source_name( $name, $limit ) {
+		$name  = trim( (string) $name, ".-_ \t\n\r\0\x0B" );
+		$limit = max( 0, (int) $limit );
+		if ( '' === $name || $limit < 8 ) {
+			return '';
+		}
+
+		if ( strlen( $name ) <= $limit ) {
+			return $name;
+		}
+
+		$name = function_exists( 'mb_strcut' )
+			? mb_strcut( $name, 0, $limit, 'UTF-8' )
+			: substr( $name, 0, $limit );
+
+		return rtrim( $name, '.-_ ' );
 	}
 
 	/**
@@ -583,6 +619,10 @@ final class JMI_Converter {
 			return false;
 		}
 
+		if ( self::FILENAME_REVISION !== (int) ( $variant['filename_revision'] ?? 0 ) ) {
+			return false;
+		}
+
 		if ( ( $variant['generation_profile'] ?? '' ) !== $generation_profile ) {
 			return false;
 		}
@@ -697,6 +737,7 @@ final class JMI_Converter {
 			'bytes'              => (int) $validation['bytes'],
 			'generated_at'       => time(),
 			'generation_profile' => $generation_profile,
+			'filename_revision'  => self::FILENAME_REVISION,
 		);
 	}
 

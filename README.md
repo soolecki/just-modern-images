@@ -26,7 +26,12 @@ SMB-backed uploads. The settings screen now clearly shows when background work
 is active. Version 0.12.1 also verifies transparency independently for AVIF and
 WebP, preventing an encoder that flattens PNG alpha from publishing a black
 background while leaving that format available for ordinary photographs. The
-project is still in pre-release development and needs broader
+0.12.2 interface uses one unambiguous completion measure, updates while the
+page is open, and keeps worker details collapsed until they are needed. Bounded
+per-image retries prevent one stubborn image from restarting the entire library
+forever. Generated companions retain the source filename while still using bounded,
+immutable names that remain safe on Windows and SMB storage. The project is
+still in pre-release development and needs broader
 integration testing before a public WordPress.org release.
 
 ## Development

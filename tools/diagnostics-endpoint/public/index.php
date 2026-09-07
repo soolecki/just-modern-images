@@ -225,6 +225,7 @@ function render_dashboard(array $sites): void
 	$all_events  = array();
 	$attention   = 0;
 	$waiting     = 0;
+	$processing  = 0;
 	$problematic = 0;
 	$cron_stale  = 0;
 
@@ -241,6 +242,7 @@ function render_dashboard(array $sites): void
 		$is_cron_stale = !empty($cron['last_observed_at']) && (int) $cron['last_observed_at'] < time() - 7200;
 		$attention += (int) ($after['attention'] ?? 0);
 		$waiting   += (int) ($after['waiting'] ?? 0);
+		$processing += (int) ($after['waiting'] ?? 0) > 0 ? 1 : 0;
 		$cron_stale += $is_cron_stale ? 1 : 0;
 		$problematic += $issues > 0 || $is_cron_stale ? 1 : 0;
 		$rows[] = array('id' => $install_id, 'site' => $site, 'latest' => $latest, 'library' => $after, 'issues' => $issues, 'cron_stale' => $is_cron_stale);
@@ -261,13 +263,13 @@ function render_dashboard(array $sites): void
 	<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Just Modern Images diagnostics</title><?php dashboard_styles(); ?></head><body>
 	<header><div><h1>Just Modern Images diagnostics</h1><p>Current health and recent processing activity across opted-in sites.</p></div><form method="post"><input type="hidden" name="action" value="logout"><button class="secondary" type="submit">Sign out</button></form></header>
 	<main>
-	<section class="stats"><article><span>Reporting sites</span><strong><?= count($rows) ?></strong></article><article><span>Sites with signals</span><strong class="<?= $problematic ? 'danger' : '' ?>"><?= $problematic ?></strong><small><?= $cron_stale ?> with cron silent for 2+ hours</small></article><article><span>Images waiting</span><strong><?= $waiting ?></strong></article><article><span>Need attention</span><strong class="<?= $attention ? 'danger' : '' ?>"><?= $attention ?></strong></article></section>
+	<section class="stats"><article><span>Reporting sites</span><strong><?= count($rows) ?></strong></article><article><span>Still processing</span><strong><?= $processing ?></strong><small><?= count($rows) - $processing ?> finished</small></article><article><span>Images waiting</span><strong><?= $waiting ?></strong></article><article><span>Need attention</span><strong class="<?= $attention ? 'danger' : '' ?>"><?= $attention ?></strong><small><?= $problematic ?> sites with recent signals · <?= $cron_stale ?> cron stale</small></article></section>
 	<section class="panel"><div class="panel-title"><div><h2>Sites</h2><p>Click a homepage to verify a reported problem.</p></div></div>
 	<?php if (empty($rows)): ?><div class="empty">No diagnostic reports have arrived yet.</div><?php else: ?><div class="table-wrap"><table><thead><tr><th>Site</th><th>Last report</th><th>Library</th><th>Formats</th><th>Cron</th><th>Runtime</th><th>Signals</th></tr></thead><tbody>
-	<?php foreach ($rows as $row): $site = $row['site']; $latest = $row['latest']; $library = $row['library']; $runtime = is_array($site['runtime'] ?? null) ? $site['runtime'] : array(); $cron = is_array($runtime['cron'] ?? null) ? $runtime['cron'] : array(); ?>
+	<?php foreach ($rows as $row): $site = $row['site']; $latest = $row['latest']; $library = $row['library']; $library_progress = library_progress($library); $runtime = is_array($site['runtime'] ?? null) ? $site['runtime'] : array(); $cron = is_array($runtime['cron'] ?? null) ? $runtime['cron'] : array(); ?>
 	<tr><td><strong><?= h(site_label($site, (string) $row['id'])) ?></strong><?php if (!empty($site['site_url'])): ?><a class="site-link" href="<?= h((string) $site['site_url']) ?>" target="_blank" rel="noopener noreferrer"><?= h((string) $site['site_url']) ?> ↗</a><?php endif; ?><code><?= h(substr((string) $row['id'], 0, 12)) ?></code></td>
 	<td><?= h(relative_time((int) ($site['last_seen'] ?? 0))) ?><small><?= h(date('Y-m-d H:i:s', (int) ($site['last_seen'] ?? 0))) ?></small></td>
-	<td><strong><?= (int) ($library['ready'] ?? 0) ?>/<?= (int) ($library['total'] ?? 0) ?> ready</strong><small><?= (int) ($library['waiting'] ?? 0) ?> waiting · <?= (int) ($library['attention'] ?? 0) ?> attention</small></td>
+	<td><strong class="<?= $library_progress['attention'] ? 'danger' : '' ?>"><?= h($library_progress['headline']) ?></strong><small><?= h($library_progress['detail']) ?></small></td>
 	<td><?= format_badge($latest, 'image/avif', 'AVIF') ?> <?= format_badge($latest, 'image/webp', 'WebP') ?></td>
 	<td><strong><?= h(interval_label((int) ($cron['average_ms'] ?? 0))) ?> average</strong><small><?= h(interval_label((int) ($cron['minimum_ms'] ?? 0))) ?> min · <?= h(interval_label((int) ($cron['maximum_ms'] ?? 0))) ?> max</small><small><?= h(relative_time((int) ($cron['last_observed_at'] ?? 0))) ?><?php if (!empty($cron['built_in_disabled'])): ?> · external<?php endif; ?></small></td>
 	<td>JMI <?= h((string) ($runtime['plugin'] ?? '—')) ?><small>WP <?= h((string) ($runtime['wordpress'] ?? '—')) ?> · PHP <?= h((string) ($runtime['php'] ?? '—')) ?></small></td>
@@ -276,8 +278,8 @@ function render_dashboard(array $sites): void
 
 	<section class="panel"><div class="panel-title"><div><h2>Recent reports</h2><p>The newest aggregated worker and error events.</p></div></div>
 	<?php if (empty($all_events)): ?><div class="empty">No activity has been reported.</div><?php else: ?><div class="table-wrap"><table class="reports-table"><thead><tr><th>Site and event</th><th>Library after run</th><th>Performance</th><th>Reported</th></tr></thead><tbody>
-	<?php foreach ($all_events as $event): $after = is_array($event['after']['library'] ?? null) ? $event['after']['library'] : array(); $results = is_array($event['item_results'] ?? null) ? $event['item_results'] : array(); ?>
-	<tr class="<?= event_is_problem($event) ? 'report-problem' : '' ?>"><td><strong><?= h((string) ($event['_site_name'] ?: substr((string) $event['_site_id'], 0, 12))) ?></strong><small><?= h((string) ($event['type'] ?? 'event')) ?> · <?= h((string) ($event['stop_reason'] ?? '')) ?></small><?php if (!empty($event['problem']['message'])): ?><code class="problem-message"><?= h((string) $event['problem']['message']) ?></code><?php endif; ?></td><td><strong><?= (int) ($after['ready'] ?? 0) ?>/<?= (int) ($after['total'] ?? 0) ?> ready</strong><small><?= (int) ($after['waiting'] ?? 0) ?> waiting · <?= (int) ($after['attention'] ?? 0) ?> attention</small></td><td><strong><?= h(worker_rate_label($event)) ?></strong><small><?= number_format(((int) ($event['duration_ms'] ?? 0)) / 1000, 1) ?> s · <?= (int) ($results['failed'] ?? 0) ?> failed · <?= h(delay_label($event)) ?> delay</small><small><?= h(performance_label($event, $results)) ?></small></td><td><time><?= h(relative_time((int) ($event['started_at'] ?? 0))) ?></time></td></tr>
+	<?php foreach ($all_events as $event): $after = is_array($event['after']['library'] ?? null) ? $event['after']['library'] : array(); $event_progress = library_progress($after); $results = is_array($event['item_results'] ?? null) ? $event['item_results'] : array(); ?>
+	<tr class="<?= event_is_problem($event) ? 'report-problem' : '' ?>"><td><strong><?= h((string) ($event['_site_name'] ?: substr((string) $event['_site_id'], 0, 12))) ?></strong><small><?= h((string) ($event['type'] ?? 'event')) ?> · <?= h((string) ($event['stop_reason'] ?? '')) ?></small><?php if (!empty($event['problem']['message'])): ?><code class="problem-message"><?= h((string) $event['problem']['message']) ?></code><?php endif; ?></td><td><strong class="<?= $event_progress['attention'] ? 'danger' : '' ?>"><?= h($event_progress['headline']) ?></strong><small><?= h($event_progress['detail']) ?></small></td><td><strong><?= h(worker_rate_label($event)) ?></strong><small><?= number_format(((int) ($event['duration_ms'] ?? 0)) / 1000, 1) ?> s · <?= (int) ($results['failed'] ?? 0) ?> failed · <?= h(delay_label($event)) ?> delay</small><small><?= h(performance_label($event, $results)) ?></small></td><td><time><?= h(relative_time((int) ($event['started_at'] ?? 0))) ?></time></td></tr>
 	<?php endforeach; ?></tbody></table></div><?php endif; ?></section>
 	</main></body></html><?php
 }
@@ -483,6 +485,33 @@ function event_is_problem(array $event): bool
 	$after   = is_array($event['after']['library'] ?? null) ? $event['after']['library'] : array();
 	$results = is_array($event['item_results'] ?? null) ? $event['item_results'] : array();
 	return (int) ($after['attention'] ?? 0) > 0 || (int) ($results['failed'] ?? 0) > 0;
+}
+
+/** @return array{headline: string, detail: string, attention: bool} */
+function library_progress(array $library): array
+{
+	$total     = max(0, (int) ($library['total'] ?? 0));
+	$optimized = max(0, (int) ($library['ready'] ?? 0));
+	$fallback  = max(0, (int) ($library['partial'] ?? 0)) + max(0, (int) ($library['skipped'] ?? 0));
+	$waiting   = max(0, (int) ($library['waiting'] ?? 0));
+	$attention = max(0, (int) ($library['attention'] ?? 0));
+	$processed = min($total, $optimized + $fallback + $attention);
+	$percent   = $total > 0 ? (int) floor(($processed / $total) * 100) : 100;
+
+	if ($waiting > 0) {
+		$percent  = min(99, $percent);
+		$headline = $percent . '% processed';
+	} elseif ($attention > 0) {
+		$headline = 'Finished — attention needed';
+	} else {
+		$headline = 'Finished';
+	}
+
+	return array(
+		'headline'  => $headline,
+		'detail'    => $optimized . ' optimized · ' . $fallback . ' safe fallback · ' . $waiting . ' waiting · ' . $attention . ' attention',
+		'attention' => $attention > 0,
+	);
 }
 
 function worker_rate_label(array $event): string

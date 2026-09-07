@@ -133,6 +133,17 @@
 	white-space: nowrap;
 }
 
+.jmi-processing-meta {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 3px;
+}
+
+.jmi-processing-meta small {
+	color: #646970;
+}
+
 .jmi-indeterminate-progress {
 	position: relative;
 	grid-column: 1 / -1;
@@ -228,6 +239,14 @@
 	color: #646970;
 }
 
+.jmi-admin[data-jmi-mode="complete"] .jmi-progress {
+	background: conic-gradient(#00a32a var(--jmi-progress), #edf1f4 0);
+}
+
+.jmi-admin[data-jmi-mode="attention"] .jmi-progress {
+	background: conic-gradient(#dba617 var(--jmi-progress), #edf1f4 0);
+}
+
 .jmi-overview-copy {
 	width: 100%;
 }
@@ -280,6 +299,21 @@
 	font-size: 21px;
 }
 
+.jmi-stat span b,
+.jmi-stat span small {
+	display: block;
+}
+
+.jmi-stat span b {
+	font-weight: 400;
+}
+
+.jmi-stat span small {
+	margin-top: 3px;
+	color: #787c82;
+	font-size: 11px;
+}
+
 .jmi-stat--danger strong {
 	color: #b32d2e;
 }
@@ -296,6 +330,67 @@
 
 .jmi-panel:last-child {
 	grid-column: 1 / -1;
+}
+
+.jmi-background-panel {
+	padding: 0;
+}
+
+.jmi-background-panel > summary {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto 18px;
+	align-items: center;
+	gap: 18px;
+	padding: 19px 24px;
+	cursor: pointer;
+	list-style: none;
+}
+
+.jmi-background-panel > summary::-webkit-details-marker {
+	display: none;
+}
+
+.jmi-background-panel > summary::after {
+	content: "";
+	width: 7px;
+	height: 7px;
+	border-right: 2px solid #646970;
+	border-bottom: 2px solid #646970;
+	transform: rotate(45deg) translateY(-2px);
+	transition: transform 0.15s ease;
+}
+
+.jmi-background-panel[open] > summary::after {
+	transform: rotate(225deg) translate(-2px, -2px);
+}
+
+.jmi-background-panel > summary strong,
+.jmi-background-panel > summary small {
+	display: block;
+}
+
+.jmi-background-panel > summary strong {
+	margin-bottom: 3px;
+	font-size: 17px;
+}
+
+.jmi-background-panel > summary small,
+.jmi-background-meta {
+	color: #646970;
+}
+
+.jmi-background-meta {
+	font-size: 12px;
+	text-align: right;
+}
+
+.jmi-background-body {
+	padding: 0 24px 22px;
+	border-top: 1px solid #f0f0f1;
+}
+
+.jmi-background-body .jmi-details {
+	margin-top: 0;
 }
 
 .jmi-panel h2 {
@@ -685,6 +780,11 @@
 		padding-left: 42px;
 	}
 
+	.jmi-processing-meta {
+		align-items: flex-start;
+		padding-left: 42px;
+	}
+
 	.jmi-overview {
 		align-items: flex-start;
 		padding: 22px;
@@ -707,6 +807,14 @@
 
 	.jmi-panel-heading {
 		flex-direction: column;
+	}
+
+	.jmi-background-panel > summary {
+		grid-template-columns: minmax(0, 1fr) 18px;
+	}
+
+	.jmi-background-meta {
+		display: none;
 	}
 
 	.jmi-run summary,

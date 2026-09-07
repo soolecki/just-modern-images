@@ -114,6 +114,18 @@ final class AdaptiveWorkerTest extends TestCase {
 		$this->assertSame( 'manual', ( new JMI_Media_Status() )->get( 2, $profile )['priority'] );
 	}
 
+	public function test_failed_image_gets_an_individual_bounded_retry(): void {
+		$queue   = $this->queue( new JMI_Test_Failing_Converter() );
+		$profile = ( new JMI_Quality_Profiles() )->generation_profile();
+
+		$this->assertTrue( $queue->process_attachment( 1 ) );
+
+		$status = ( new JMI_Media_Status() )->get( 1, $profile );
+		$this->assertSame( 'queued', $status['state'] );
+		$this->assertSame( 1, $status['failure_count'] );
+		$this->assertNotFalse( wp_next_scheduled( JMI_Queue::PROCESS_HOOK, array( 1 ) ) );
+	}
+
 	public function test_missing_scan_event_is_restored_without_duplicates(): void {
 		$queue   = $this->queue( new JMI_Test_Recording_Converter() );
 		$profile = ( new JMI_Quality_Profiles() )->generation_profile();
@@ -164,6 +176,20 @@ final class AdaptiveWorkerTest extends TestCase {
 		$this->assertSame( 2, $status['last_worker_attempts'] );
 	}
 
+	public function test_live_cron_request_leaves_a_scheduled_event_to_wordpress(): void {
+		$converter = new JMI_Test_Recording_Converter();
+		$queue     = $this->queue( $converter );
+		$GLOBALS['jmi_test_doing_cron'] = true;
+		update_option( JMI_Queue::STATUS_OPTION, array( 'status' => 'queued' ) );
+		wp_schedule_single_event( time() - 1, JMI_Queue::SCAN_HOOK );
+
+		$queue->run_due_scan_during_cron();
+
+		$this->assertSame( array(), $converter->attachment_ids );
+		$this->assertNotFalse( wp_next_scheduled( JMI_Queue::SCAN_HOOK ) );
+		$this->assertSame( 0, $queue->status()['recovery_count'] );
+	}
+
 	public function test_worker_budget_expands_on_servers_with_room(): void {
 		$queue  = $this->queue( new JMI_Test_Recording_Converter() );
 		$method = new ReflectionMethod( JMI_Queue::class, 'default_worker_time_budget' );
@@ -203,6 +229,40 @@ final class AdaptiveWorkerTest extends TestCase {
 		$this->assertSame( 123456, get_option( JMI_Queue::HEALTH_OPTION ) );
 	}
 
+	public function test_stale_fallback_does_not_restart_a_full_library_scan(): void {
+		global $wpdb;
+
+		$wpdb                          = new JMI_Test_Attachment_Wpdb( array( 1 ) );
+		$GLOBALS['jmi_test_is_admin'] = true;
+		$profile                       = ( new JMI_Quality_Profiles() )->generation_profile();
+		$stale_value                   = ( new JMI_Media_Status() )->current_values( array( 'stale' ), $profile )[0];
+		update_post_meta( 1, JMI_Media_Status::STATE_META_KEY, $stale_value );
+		update_option( JMI_Queue::STATUS_OPTION, array( 'status' => 'complete' ) );
+		$queue = $this->queue( new JMI_Test_Recording_Converter() );
+
+		$queue->ensure_dormant_scan();
+
+		$this->assertSame( 'complete', $queue->status()['status'] );
+		$this->assertFalse( wp_next_scheduled( JMI_Queue::SCAN_HOOK ) );
+	}
+
+	public function test_missing_image_event_is_restored_without_a_full_library_scan(): void {
+		global $wpdb;
+
+		$wpdb                          = new JMI_Test_Attachment_Wpdb( array( 1 ) );
+		$GLOBALS['jmi_test_is_admin'] = true;
+		$profile                       = ( new JMI_Quality_Profiles() )->generation_profile();
+		( new JMI_Media_Status() )->mark_queued( 1, 'background', $profile );
+		update_option( JMI_Queue::STATUS_OPTION, array( 'status' => 'complete' ) );
+		$queue = $this->queue( new JMI_Test_Recording_Converter() );
+
+		$queue->ensure_dormant_scan();
+
+		$this->assertSame( 'complete', $queue->status()['status'] );
+		$this->assertNotFalse( wp_next_scheduled( JMI_Queue::PROCESS_HOOK, array( 1 ) ) );
+		$this->assertFalse( wp_next_scheduled( JMI_Queue::SCAN_HOOK ) );
+	}
+
 	public function test_repeated_upgrade_does_not_reset_an_active_scan(): void {
 		$queue   = $this->queue( new JMI_Test_Recording_Converter() );
 		$profile = ( new JMI_Quality_Profiles() )->generation_profile();
@@ -224,6 +284,30 @@ final class AdaptiveWorkerTest extends TestCase {
 		$this->assertSame( 12, $status['processed'] );
 		$this->assertSame( 12, $status['last_worker_attempts'] );
 		$this->assertNotFalse( wp_next_scheduled( JMI_Queue::SCAN_HOOK ) );
+		$this->assertSame( 'upgrade_followup', get_option( JMI_Queue::FOLLOWUP_OPTION ) );
+	}
+
+	public function test_pending_upgrade_scan_starts_after_the_current_scan_finishes(): void {
+		global $wpdb;
+
+		$wpdb    = new JMI_Test_Attachment_Wpdb( array() );
+		$queue   = $this->queue( new JMI_Test_Recording_Converter() );
+		$profile = ( new JMI_Quality_Profiles() )->generation_profile();
+		update_option(
+			JMI_Queue::STATUS_OPTION,
+			array(
+				'status'             => 'running',
+				'generation_profile' => $profile,
+			)
+		);
+		update_option( JMI_Queue::FOLLOWUP_OPTION, 'upgrade_followup' );
+
+		$queue->scan_library();
+
+		$this->assertSame( 'queued', $queue->status()['status'] );
+		$this->assertSame( 'upgrade_followup', $queue->status()['reason'] );
+		$this->assertSame( 0, $queue->status()['cursor'] );
+		$this->assertFalse( get_option( JMI_Queue::FOLLOWUP_OPTION, false ) );
 	}
 
 	private function queue( $converter ): JMI_Queue {
@@ -259,6 +343,22 @@ final class JMI_Test_Recording_Converter {
 	}
 }
 
+final class JMI_Test_Failing_Converter {
+
+	public function convert_attachment( $attachment_id ): array {
+		return array(
+			'attachment_id' => $attachment_id,
+			'generated'     => 0,
+			'reused'        => 0,
+			'retained'      => 0,
+			'skipped'       => 0,
+			'failed'        => 1,
+			'last_reason'   => 'encode_failed',
+			'state'         => 'failed',
+		);
+	}
+}
+
 final class JMI_Test_Attachment_Wpdb {
 
 	public $posts    = 'wp_posts';
@@ -278,6 +378,21 @@ final class JMI_Test_Attachment_Wpdb {
 	}
 
 	public function get_col( $prepared ) {
+		if ( false !== strpos( $prepared['query'], 'INNER JOIN' ) ) {
+			$state_value = (string) $prepared['args'][1];
+			$limit       = (int) $prepared['args'][2];
+			$ids         = array_values(
+				array_filter(
+					$this->attachment_ids,
+					static function ( $attachment_id ) use ( $state_value ) {
+						return $state_value === ( $GLOBALS['jmi_test_post_meta'][ $attachment_id ][ JMI_Media_Status::STATE_META_KEY ] ?? '' );
+					}
+				)
+			);
+
+			return array_slice( $ids, 0, $limit );
+		}
+
 		$cursor = (int) $prepared['args'][0];
 		$limit  = (int) $prepared['args'][1];
 		$ids    = array_values(

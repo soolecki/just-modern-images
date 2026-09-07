@@ -14,8 +14,9 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 final class JMI_Media_Status {
 
-	const STATE_META_KEY  = '_jmi_state';
-	const DETAIL_META_KEY = '_jmi_status';
+	const STATE_META_KEY    = '_jmi_state';
+	const DETAIL_META_KEY   = '_jmi_status';
+	const AUTOMATIC_RETRIES = 3;
 
 	/**
 	 * Return a normalized attachment status for the active profile.
@@ -140,6 +141,11 @@ final class JMI_Media_Status {
 		if ( $has_failures ) {
 			$delay       = min( DAY_IN_SECONDS, 15 * MINUTE_IN_SECONDS * ( 2 ** min( 6, $failure_count - 1 ) ) );
 			$retry_after = time() + $delay;
+		}
+
+		if ( 'stale' === $state && $failure_count >= self::AUTOMATIC_RETRIES ) {
+			$state       = 'partial';
+			$retry_after = 0;
 		}
 
 		$this->write(

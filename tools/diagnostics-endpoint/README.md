@@ -52,3 +52,7 @@ intervals, scheduling delay, worker throughput, image timing, memory use, and
 redacted fatal errors from the plugin directory. It rejects oversized payloads,
 keeps a bounded event history, and removes events older than the configured
 retention period.
+
+The dashboard treats a site as finished when no images are waiting. Images
+completed with a safe fallback or the untouched original are shown separately
+from fully optimized images and do not make a finished site look stuck.

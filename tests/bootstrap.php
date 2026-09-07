@@ -34,12 +34,30 @@ function __( $text, $domain = 'default' ) {
 	return $text;
 }
 
+function _n( $single, $plural, $number, $domain = 'default' ) {
+	$GLOBALS['jmi_test_translation_calls'][] = $domain;
+	return 1 === (int) $number ? $single : $plural;
+}
+
+function number_format_i18n( $number, $decimals = 0 ) {
+	return number_format( $number, $decimals, '.', ',' );
+}
+
+function human_time_diff( $from, $to = 0 ) {
+	$seconds = abs( (int) $to - (int) $from );
+	return $seconds . ' seconds';
+}
+
 function sanitize_key( $key ) {
 	return preg_replace( '/[^a-z0-9_\-]/', '', strtolower( (string) $key ) );
 }
 
 function sanitize_text_field( $value ) {
 	return trim( strip_tags( (string) $value ) );
+}
+
+function sanitize_file_name( $value ) {
+	return preg_replace( '/[^A-Za-z0-9._-]/', '-', (string) $value );
 }
 
 function wp_unslash( $value ) {

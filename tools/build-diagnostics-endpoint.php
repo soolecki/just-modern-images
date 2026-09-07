@@ -5,7 +5,7 @@
 
 $root       = dirname( __DIR__ );
 $source     = $root . '/tools/diagnostics-endpoint';
-$version    = '0.1.0';
+$version    = '0.1.1';
 $dist_dir   = $root . '/dist';
 $zip_path   = $dist_dir . '/jmi-diagnostics-endpoint-' . $version . '.zip';
 $base_path  = 'jmi-diagnostics-endpoint/';

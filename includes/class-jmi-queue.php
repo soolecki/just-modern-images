@@ -21,6 +21,7 @@ final class JMI_Queue {
 	const LOCK_TTL        = 900;
 	const WORKER_LOCK     = 'jmi_scan_worker_lock';
 	const HEALTH_OPTION   = 'jmi_queue_health_checked';
+	const FOLLOWUP_OPTION = 'jmi_queue_followup_scan';
 	const WORKER_TTL      = 300;
 	const SCHEDULE_GRACE  = 300;
 	const HEALTH_INTERVAL = 3600;
@@ -155,17 +156,13 @@ final class JMI_Queue {
 		}
 
 		$next_event = wp_next_scheduled( self::SCAN_HOOK );
-		if ( $next_event && (int) $next_event > time() + 1 ) {
-			return;
-		}
-
 		if ( $next_event ) {
-			wp_unschedule_event( $next_event, self::SCAN_HOOK );
+			return;
 		}
 
 		self::$cron_recovery_ran        = true;
 		$status['last_recovery_at']     = time();
-		$status['last_recovery_reason'] = $next_event ? 'due_event_claimed' : 'missing_event_claimed';
+		$status['last_recovery_reason'] = 'missing_event_claimed';
 		$status['recovery_count']       = (int) ( $status['recovery_count'] ?? 0 ) + 1;
 		$status['last_update']          = time();
 		update_option( self::STATUS_OPTION, $status, false );
@@ -353,6 +350,16 @@ final class JMI_Queue {
 			}
 
 			$this->media_status->record_result( $attachment_id, $generation_profile, $summary );
+			$recorded_status = $this->media_status->get( $attachment_id, $generation_profile );
+			if (
+				! empty( $summary['failed'] ) &&
+				in_array( $recorded_status['state'], array( 'stale', 'failed' ), true ) &&
+				(int) $recorded_status['failure_count'] < JMI_Media_Status::AUTOMATIC_RETRIES
+			) {
+				$retry_delay = max( 60, (int) $recorded_status['retry_after'] - time() );
+				$this->media_status->mark_queued( $attachment_id, 'background', $generation_profile );
+				$this->schedule_attachment( $attachment_id, $retry_delay, 'background', false, false );
+			}
 			$this->record_counters( $summary );
 			$item_duration = microtime( true ) - $item_started;
 			$this->record_request_attempt( $item_duration );
@@ -404,6 +411,7 @@ final class JMI_Queue {
 			in_array( $current['status'], array( 'queued', 'running' ), true ) &&
 			$generation_profile === $current['generation_profile']
 		) {
+			update_option( self::FOLLOWUP_OPTION, 'upgrade_followup', false );
 			$this->ensure_scan_scheduled();
 			return;
 		}
@@ -439,9 +447,9 @@ final class JMI_Queue {
 				'next_worker_due'         => 0,
 				'last_lock_contention_at' => (int) $current['last_lock_contention_at'],
 				'last_lock_recovery_at'   => (int) $current['last_lock_recovery_at'],
-				'last_recovery_at'        => (int) $current['last_recovery_at'],
-				'last_recovery_reason'    => (string) $current['last_recovery_reason'],
-				'recovery_count'          => (int) $current['recovery_count'],
+				'last_recovery_at'        => 0,
+				'last_recovery_reason'    => '',
+				'recovery_count'          => 0,
 			),
 			false
 		);
@@ -530,11 +538,60 @@ final class JMI_Queue {
 			return;
 		}
 		update_option( self::HEALTH_OPTION, $now, false );
+		$this->restore_retry_events();
 
 		$stats     = $this->media_status->library_stats( $this->profiles->generation_profile() );
-		$unsettled = (int) ( $stats['pending'] ?? 0 ) + (int) ( $stats['queued'] ?? 0 ) + (int) ( $stats['processing'] ?? 0 ) + (int) ( $stats['stale'] ?? 0 );
+		$unsettled = (int) ( $stats['pending'] ?? 0 ) + (int) ( $stats['processing'] ?? 0 );
 		if ( $unsettled > 0 ) {
 			$this->start_scan( 'recovery' );
+		}
+	}
+
+	/**
+	 * Restore a bounded number of missing per-image events.
+	 *
+	 * Attachments are marked as queued before WordPress schedules their event.
+	 * This lets the health check recover work even when an event disappears.
+	 *
+	 * @return void
+	 */
+	private function restore_retry_events() {
+		global $wpdb;
+
+		if ( ! method_exists( $this->media_status, 'current_values' ) ) {
+			return;
+		}
+
+		$profile = $this->profiles->generation_profile();
+		$values  = $this->media_status->current_values( array( 'queued' ), $profile );
+		if ( 1 !== count( $values ) ) {
+			return;
+		}
+
+		$query = $wpdb->prepare(
+			"SELECT DISTINCT p.ID FROM {$wpdb->posts} p
+			INNER JOIN {$wpdb->postmeta} pm ON p.ID = pm.post_id
+			WHERE p.post_type = 'attachment'
+			AND p.post_mime_type IN ('image/jpeg', 'image/png')
+			AND pm.meta_key = %s
+			AND pm.meta_value = %s
+			ORDER BY p.ID ASC
+			LIMIT %d",
+			JMI_Media_Status::STATE_META_KEY,
+			$values[0],
+			25
+		);
+		$ids   = $wpdb->get_col( $query ); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
+
+		foreach ( is_array( $ids ) ? $ids : array() as $attachment_id ) {
+			$attachment_id = absint( $attachment_id );
+			$status        = $this->media_status->get( $attachment_id, $profile );
+			if ( 'queued' !== $status['state'] || wp_next_scheduled( self::PROCESS_HOOK, array( $attachment_id ) ) ) {
+				continue;
+			}
+
+			$priority = $status['priority'] ? $status['priority'] : 'background';
+			$this->schedule_attachment( $attachment_id, 1, $priority, false, false );
 		}
 	}
 
@@ -678,6 +735,10 @@ final class JMI_Queue {
 		if ( ! $complete ) {
 			$delay = $paused_until ? max( 5, min( 3600, $paused_until - time() + 1 ) ) : 5;
 			$this->schedule_scan( $delay );
+		} elseif ( get_option( self::FOLLOWUP_OPTION, false ) ) {
+			$reason = sanitize_key( get_option( self::FOLLOWUP_OPTION, 'upgrade_followup' ) );
+			delete_option( self::FOLLOWUP_OPTION );
+			$this->start_scan( $reason ? $reason : 'upgrade_followup' );
 		}
 	}
 
@@ -987,6 +1048,7 @@ final class JMI_Queue {
 		wp_clear_scheduled_hook( self::PROCESS_HOOK );
 		wp_clear_scheduled_hook( self::SCAN_HOOK );
 		delete_option( self::WORKER_LOCK );
+		delete_option( self::FOLLOWUP_OPTION );
 	}
 
 	/**

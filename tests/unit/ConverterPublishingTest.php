@@ -55,7 +55,7 @@ final class ConverterPublishingTest extends TestCase {
 		wp_delete_file( $target );
 	}
 
-	public function test_variant_filename_does_not_inherit_a_long_source_name(): void {
+	public function test_variant_filename_keeps_a_bounded_source_name(): void {
 		$converter = new JMI_Converter( new stdClass(), new stdClass(), new stdClass(), new stdClass() );
 		$method    = new ReflectionMethod( JMI_Converter::class, 'variant_paths' );
 		$method->setAccessible( true );
@@ -66,8 +66,25 @@ final class ConverterPublishingTest extends TestCase {
 
 		$paths = $method->invoke( $converter, $source, '1234567890abcdef', 'webp' );
 
-		$this->assertSame( 'jmi-1234567890abcdef.webp', basename( $paths['absolute'] ) );
-		$this->assertSame( '2026/09/jmi-1234567890abcdef.webp', $paths['relative'] );
+		$this->assertStringStartsWith( str_repeat( 'a', 40 ), basename( $paths['absolute'] ) );
+		$this->assertStringEndsWith( '.jmi-1234567890abcdef.webp', basename( $paths['absolute'] ) );
+		$this->assertLessThanOrEqual( 180, strlen( basename( $paths['absolute'] ) ) );
+		$this->assertSame( '2026/09/' . basename( $paths['absolute'] ), $paths['relative'] );
+	}
+
+	public function test_variant_filename_preserves_the_original_stem(): void {
+		$converter = new JMI_Converter( new stdClass(), new stdClass(), new stdClass(), new stdClass() );
+		$method    = new ReflectionMethod( JMI_Converter::class, 'variant_paths' );
+		$method->setAccessible( true );
+		$source = array(
+			'path'          => 'C:\\uploads\\2026\\09\\MBE-ZDJECIE-683x1024.png',
+			'relative_path' => '2026/09/MBE-ZDJECIE-683x1024.png',
+		);
+
+		$paths = $method->invoke( $converter, $source, 'c2df4713c85bfd3d', 'avif' );
+
+		$this->assertSame( 'MBE-ZDJECIE-683x1024.png.jmi-c2df4713c85bfd3d.avif', basename( $paths['absolute'] ) );
+		$this->assertSame( '2026/09/MBE-ZDJECIE-683x1024.png.jmi-c2df4713c85bfd3d.avif', $paths['relative'] );
 	}
 
 	public function test_variant_token_changes_with_generation_profile(): void {
