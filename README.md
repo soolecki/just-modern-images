@@ -23,7 +23,10 @@ Network activation initializes each multisite site in its own WordPress context,
 and new sites are handled automatically. Short immutable filenames, verified
 race-safe publishing, and bounded retries improve behavior on Windows, IIS, and
 SMB-backed uploads. The settings screen now clearly shows when background work
-is active. The project is still in pre-release development and needs broader
+is active. Version 0.12.1 also verifies transparency independently for AVIF and
+WebP, preventing an encoder that flattens PNG alpha from publishing a black
+background while leaving that format available for ordinary photographs. The
+project is still in pre-release development and needs broader
 integration testing before a public WordPress.org release.
 
 ## Development

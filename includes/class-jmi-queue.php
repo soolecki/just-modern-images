@@ -1173,7 +1173,6 @@ final class JMI_Queue {
 	 */
 	private function release_worker_lock() {
 		delete_option( self::WORKER_LOCK );
-		delete_option( self::HEALTH_OPTION );
 	}
 
 	/**

@@ -3,10 +3,10 @@
  * Plugin Name: Just Modern Images
  * Plugin URI: https://github.com/soolecki/just-modern-images
  * Description: Generates smaller WebP and AVIF companions while keeping every original image intact.
- * Version: 0.12.0
+ * Version: 0.12.1
  * Requires at least: 6.5
  * Requires PHP: 7.4
- * Author: Sebastian Sołecki
+ * Author: CLU Level Up
  * Author URI: https://clu.pl
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -19,12 +19,13 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'JMI_VERSION', '0.12.0' );
+define( 'JMI_VERSION', '0.12.1' );
 define( 'JMI_PLUGIN_FILE', __FILE__ );
 define( 'JMI_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 
 require_once JMI_PLUGIN_DIR . 'includes/class-jmi-quality-profiles.php';
 require_once JMI_PLUGIN_DIR . 'includes/class-jmi-error-trap.php';
+require_once JMI_PLUGIN_DIR . 'includes/class-jmi-transparency.php';
 require_once JMI_PLUGIN_DIR . 'includes/class-jmi-capabilities.php';
 require_once JMI_PLUGIN_DIR . 'includes/class-jmi-diagnostics.php';
 require_once JMI_PLUGIN_DIR . 'includes/class-jmi-activity-log.php';

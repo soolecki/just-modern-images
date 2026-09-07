@@ -258,6 +258,10 @@ function wp_image_editor_supports() {
 	return false;
 }
 
+function wp_get_image_editor() {
+	return new stdClass();
+}
+
 function wp_delete_file( $path ) {
 	if ( is_file( $path ) ) {
 		unlink( $path );
@@ -450,6 +454,7 @@ class WP_HTML_Tag_Processor {
 
 require_once dirname( __DIR__ ) . '/includes/class-jmi-quality-profiles.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-error-trap.php';
+require_once dirname( __DIR__ ) . '/includes/class-jmi-transparency.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-capabilities.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-diagnostics.php';
 require_once dirname( __DIR__ ) . '/includes/class-jmi-activity-log.php';

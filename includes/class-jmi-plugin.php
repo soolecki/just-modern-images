@@ -21,7 +21,7 @@ unset( $jmi_activity_log_file );
 final class JMI_Plugin {
 
 	const DATA_REVISION_OPTION = 'jmi_data_revision';
-	const DATA_REVISION        = 2;
+	const DATA_REVISION        = 3;
 	const LEGACY_VERSION       = '0.11.3';
 
 	/**

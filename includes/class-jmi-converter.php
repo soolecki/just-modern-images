@@ -113,7 +113,12 @@ final class JMI_Converter {
 					'state'  => 'unknown',
 					'reason' => 'not_checked',
 				);
-				$is_required          = 'available' === ( $capability['state'] ?? 'unknown' );
+				$format_available     = 'available' === ( $capability['state'] ?? 'unknown' );
+				$needs_transparency   = ! empty( $source['has_transparency'] );
+				$alpha_supported      = ! $needs_transparency ||
+					! method_exists( $this->capabilities, 'supports_transparency' ) ||
+					$this->capabilities->supports_transparency( $mime_type );
+				$is_required          = $format_available && $alpha_supported;
 				$was_reused           = false;
 
 				if ( $is_required ) {
@@ -121,9 +126,12 @@ final class JMI_Converter {
 				}
 
 				if ( ! $is_required ) {
-					$variant = $this->outcome(
+					$skip_reason = $format_available && ! $alpha_supported
+						? 'alpha_unsupported'
+						: (string) ( $capability['reason'] ?? 'editor_unsupported' );
+					$variant     = $this->outcome(
 						'skipped',
-						(string) ( $capability['reason'] ?? 'editor_unsupported' ),
+						$skip_reason,
 						$mime_type,
 						$generation_profile
 					);
@@ -429,6 +437,21 @@ final class JMI_Converter {
 		}
 		unset( $decoder );
 
+		if ( ! empty( $source['has_transparency'] ) ) {
+			$transparency = JMI_Transparency::has_transparency( $path, $mime_type );
+			if ( true !== $transparency ) {
+				$reason = false === $transparency ? 'alpha_lost' : 'alpha_unverified';
+				if ( method_exists( $this->capabilities, 'record_transparency_failure' ) ) {
+					$this->capabilities->record_transparency_failure( $mime_type, $reason );
+				}
+
+				return array(
+					'status' => 'failed',
+					'reason' => $reason,
+				);
+			}
+		}
+
 		$bytes = wp_filesize( $path );
 		if ( $bytes >= (int) $source['bytes'] ) {
 			return array(
@@ -623,15 +646,17 @@ final class JMI_Converter {
 	 */
 	private function source_manifest_data( $source ) {
 		return array(
-			'size_name'     => $source['size_name'],
-			'relative_path' => $source['relative_path'],
-			'mime_type'     => $source['mime_type'],
-			'width'         => (int) $source['width'],
-			'height'        => (int) $source['height'],
-			'bytes'         => (int) $source['bytes'],
-			'modified'      => (int) $source['modified'],
-			'signature'     => $source['signature'],
-			'variants'      => array(),
+			'size_name'             => $source['size_name'],
+			'relative_path'         => $source['relative_path'],
+			'mime_type'             => $source['mime_type'],
+			'width'                 => (int) $source['width'],
+			'height'                => (int) $source['height'],
+			'bytes'                 => (int) $source['bytes'],
+			'modified'              => (int) $source['modified'],
+			'has_transparency'      => ! empty( $source['has_transparency'] ),
+			'transparency_verified' => ! empty( $source['transparency_verified'] ),
+			'signature'             => $source['signature'],
+			'variants'              => array(),
 		);
 	}
 

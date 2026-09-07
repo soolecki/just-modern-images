@@ -73,4 +73,44 @@ final class CapabilitiesTest extends TestCase {
 		$capabilities->record_success( 'image/webp' );
 		$this->assertSame( 0, $capabilities->all_formats_paused_until() );
 	}
+
+	public function test_alpha_failure_disables_only_transparent_sources_for_one_format(): void {
+		$capabilities = new JMI_Capabilities();
+		$fingerprint  = new ReflectionMethod( JMI_Capabilities::class, 'fingerprint' );
+		$fingerprint->setAccessible( true );
+		$environment = $fingerprint->invoke( $capabilities );
+		update_option(
+			JMI_Capabilities::OPTION_NAME,
+			array(
+				'schema'   => JMI_Capabilities::STORAGE_SCHEMA,
+				'profiles' => array(
+					$environment => array(
+						'checked_at' => time(),
+						'formats'    => array(
+							'image/avif' => array(
+								'state'                 => 'available',
+								'reason'                => 'probe_passed',
+								'supports_transparency' => true,
+							),
+							'image/webp' => array(
+								'state'                 => 'available',
+								'reason'                => 'probe_passed',
+								'supports_transparency' => true,
+							),
+						),
+					),
+				),
+			)
+		);
+
+		$capabilities->record_transparency_failure( 'image/avif', 'alpha_lost' );
+		$formats = $capabilities->get_all();
+
+		$this->assertSame( 'available', $formats['image/avif']['state'] );
+		$this->assertFalse( $formats['image/avif']['supports_transparency'] );
+		$this->assertSame( 'alpha_lost', $formats['image/avif']['transparency_reason'] );
+		$this->assertTrue( $capabilities->supports( 'image/avif' ) );
+		$this->assertFalse( $capabilities->supports_transparency( 'image/avif' ) );
+		$this->assertTrue( $capabilities->supports_transparency( 'image/webp' ) );
+	}
 }

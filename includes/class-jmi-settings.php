@@ -822,8 +822,13 @@ final class JMI_Settings {
 	 */
 	private function capability_reason( $capability ) {
 		$reason = sanitize_key( $capability['reason'] ?? 'not_checked' );
+		$detail = '<small>' . esc_html( $this->diagnostic_label( $reason ) ) . ' <code>' . esc_html( $reason ) . '</code></small>';
 
-		return '<small>' . esc_html( $this->diagnostic_label( $reason ) ) . ' <code>' . esc_html( $reason ) . '</code></small>';
+		if ( 'available' === ( $capability['state'] ?? '' ) && array_key_exists( 'supports_transparency', $capability ) && empty( $capability['supports_transparency'] ) ) {
+			$detail .= '<small>' . esc_html__( 'Transparent PNG files will use another verified format or the original image.', 'just-modern-images' ) . '</small>';
+		}
+
+		return $detail;
 	}
 
 	/**

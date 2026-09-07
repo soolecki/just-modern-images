@@ -190,6 +190,19 @@ final class AdaptiveWorkerTest extends TestCase {
 		$this->assertNotFalse( wp_next_scheduled( JMI_Queue::SCAN_HOOK ) );
 	}
 
+	public function test_worker_release_keeps_the_dormant_scan_throttle(): void {
+		$queue  = $this->queue( new JMI_Test_Recording_Converter() );
+		$method = new ReflectionMethod( JMI_Queue::class, 'release_worker_lock' );
+		$method->setAccessible( true );
+		update_option( JMI_Queue::WORKER_LOCK, time() );
+		update_option( JMI_Queue::HEALTH_OPTION, 123456 );
+
+		$method->invoke( $queue );
+
+		$this->assertFalse( get_option( JMI_Queue::WORKER_LOCK, false ) );
+		$this->assertSame( 123456, get_option( JMI_Queue::HEALTH_OPTION ) );
+	}
+
 	public function test_repeated_upgrade_does_not_reset_an_active_scan(): void {
 		$queue   = $this->queue( new JMI_Test_Recording_Converter() );
 		$profile = ( new JMI_Quality_Profiles() )->generation_profile();

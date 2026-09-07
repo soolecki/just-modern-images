@@ -3,7 +3,7 @@ Tags: webp, avif, images, performance, optimization
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.12.0
+Stable tag: 0.12.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -34,6 +34,8 @@ When an image needs attention, the settings screen and Media Library show a plai
 = Designed to fail safely =
 
 Image encoding varies widely between hosting providers. Just Modern Images performs a real capability probe and validates every generated file before it becomes eligible for use. Empty, corrupt, oversized, incomplete, or undecodable output is discarded.
+
+Transparency is verified separately for AVIF and WebP. If a server encoder flattens transparent PNG files, that format remains available for ordinary photographs while transparent images automatically use another verified format or the original file.
 
 WebP and AVIF are independent. If one encoder is missing or unstable, the other format continues to work. Repeated encoder failures temporarily pause only the affected format.
 
@@ -104,6 +106,15 @@ The plugin uses normal WordPress upload URLs and provides a filter for CDN integ
 Not in this release. The first release intentionally covers attachment images rendered through standard WordPress APIs without buffering or rewriting the entire page.
 
 == Changelog ==
+
+= 0.12.1 =
+
+* Added per-format checks that verify whether the server preserves transparent pixels.
+* Rejected generated files that lose the source PNG alpha channel before they can be published or served.
+* Kept AVIF and WebP available for opaque images when only their transparency support is unreliable.
+* Queued a one-time library review so modern variants created by an older version are validated again.
+* Kept the hourly dormant-queue check throttled after successful worker runs, avoiding repeated full-library recounts.
+* Updated the plugin author to CLU Level Up.
 
 = 0.12.0 =
 

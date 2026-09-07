@@ -841,7 +841,7 @@ final class JMI_Diagnostics_Reporter {
 	 * Normalize format capability states.
 	 *
 	 * @param mixed $formats Raw formats.
-	 * @return array<string, array<string, string>>
+	 * @return array<string, array<string, bool|string|null>>
 	 */
 	private function formats( $formats ) {
 		$formats = is_array( $formats ) ? $formats : array();
@@ -850,8 +850,10 @@ final class JMI_Diagnostics_Reporter {
 		foreach ( array( 'image/avif', 'image/webp' ) as $mime_type ) {
 			$format               = is_array( $formats[ $mime_type ] ?? null ) ? $formats[ $mime_type ] : array();
 			$result[ $mime_type ] = array(
-				'state'  => sanitize_key( $format['state'] ?? 'unknown' ),
-				'reason' => sanitize_key( $format['reason'] ?? 'not_checked' ),
+				'state'                 => sanitize_key( $format['state'] ?? 'unknown' ),
+				'reason'                => sanitize_key( $format['reason'] ?? 'not_checked' ),
+				'supports_transparency' => array_key_exists( 'supports_transparency', $format ) ? (bool) $format['supports_transparency'] : null,
+				'transparency_reason'   => sanitize_key( $format['transparency_reason'] ?? '' ),
 			);
 		}
 

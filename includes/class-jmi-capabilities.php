@@ -18,7 +18,7 @@ final class JMI_Capabilities {
 	const HEALTH_OPTION  = 'jmi_format_health';
 	const STORAGE_SCHEMA = 2;
 	const MAX_PROFILES   = 32;
-	const PROBE_VERSION  = 2;
+	const PROBE_VERSION  = 3;
 	const FAILURE_LIMIT  = 3;
 	const FAILURE_WINDOW = 600;
 	const PAUSE_SECONDS  = 3600;
@@ -81,6 +81,46 @@ final class JMI_Capabilities {
 		$results = $this->get_all();
 
 		return isset( $results[ $mime_type ]['state'] ) && 'available' === $results[ $mime_type ]['state'];
+	}
+
+	/**
+	 * Determine whether this environment preserves transparent pixels.
+	 *
+	 * Format support and transparency support are deliberately separate. A
+	 * server may still create useful AVIF files for JPEG sources even when its
+	 * encoder flattens transparent PNG files.
+	 *
+	 * @param string $mime_type Output MIME type.
+	 * @return bool
+	 */
+	public function supports_transparency( $mime_type ) {
+		$results = $this->get_all();
+
+		return ! empty( $results[ $mime_type ]['supports_transparency'] );
+	}
+
+	/**
+	 * Stop using one encoder for transparent sources after a bad real output.
+	 *
+	 * @param string $mime_type Output MIME type.
+	 * @param string $reason    Stable failure reason.
+	 * @return void
+	 */
+	public function record_transparency_failure( $mime_type, $reason = 'alpha_lost' ) {
+		if ( ! isset( $this->formats()[ $mime_type ] ) ) {
+			return;
+		}
+
+		$fingerprint = $this->fingerprint();
+		$storage     = $this->get_storage();
+		if ( empty( $storage['profiles'][ $fingerprint ]['formats'][ $mime_type ] ) ) {
+			return;
+		}
+
+		$storage['profiles'][ $fingerprint ]['formats'][ $mime_type ]['supports_transparency'] = false;
+		$storage['profiles'][ $fingerprint ]['formats'][ $mime_type ]['transparency_reason']   = sanitize_key( $reason );
+		$storage['profiles'][ $fingerprint ]['checked_at']                                     = time();
+		update_option( self::OPTION_NAME, $storage, false );
 	}
 
 	/**
@@ -229,9 +269,9 @@ final class JMI_Capabilities {
 		}
 
 		$target_path = $source_path . '.' . $extension;
-		// A fixed 1x1 PNG fixture used only for a local image-editor probe.
+		// A fixed 2x2 PNG with opaque, translucent, and transparent pixels.
 		$probe_image = base64_decode( // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode
-			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+			'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAGElEQVR4nGP4z8DAwPCf4T8LI8P/BhAHADONBYGvJC9HAAAAAElFTkSuQmCC',
 			true
 		);
 
@@ -279,7 +319,16 @@ final class JMI_Capabilities {
 				return $this->result( 'unavailable', 'invalid_output' );
 			}
 
-			return $this->result( 'available', 'probe_passed' );
+			$transparency = JMI_Transparency::has_transparency( $saved_path, $mime_type );
+
+			return $this->result(
+				'available',
+				'probe_passed',
+				array(
+					'supports_transparency' => true === $transparency,
+					'transparency_reason'   => true === $transparency ? 'probe_passed' : ( false === $transparency ? 'alpha_lost' : 'alpha_unverified' ),
+				)
+			);
 		} catch ( Throwable $error ) {
 			return $this->result( 'unavailable', 'unexpected_editor_failure' );
 		} finally {
@@ -356,15 +405,19 @@ final class JMI_Capabilities {
 	/**
 	 * Build a capability result.
 	 *
-	 * @param string $state  Capability state.
-	 * @param string $reason Short reason code.
+	 * @param string               $state  Capability state.
+	 * @param string               $reason Short reason code.
+	 * @param array<string, mixed> $extra  Additional verified details.
 	 * @return array<string, mixed>
 	 */
-	private function result( $state, $reason ) {
-		return array(
-			'state'      => $state,
-			'reason'     => $reason,
-			'checked_at' => time(),
+	private function result( $state, $reason, $extra = array() ) {
+		return array_merge(
+			array(
+				'state'      => $state,
+				'reason'     => $reason,
+				'checked_at' => time(),
+			),
+			is_array( $extra ) ? $extra : array()
 		);
 	}
 

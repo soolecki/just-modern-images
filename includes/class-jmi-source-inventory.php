@@ -102,6 +102,7 @@ final class JMI_Source_Inventory {
 		$relative_path = ltrim( substr( $file, strlen( $base ) ), '/' );
 		$file_size     = wp_filesize( $path_real );
 		$modified      = filemtime( $path_real );
+		$transparency  = 'image/png' === $mime ? JMI_Transparency::has_transparency( $path_real, $mime ) : false;
 		$signature     = implode(
 			'|',
 			array(
@@ -115,15 +116,17 @@ final class JMI_Source_Inventory {
 		);
 
 		return array(
-			'size_name'     => $size_name,
-			'path'          => $path_real,
-			'relative_path' => $relative_path,
-			'mime_type'     => $mime,
-			'width'         => (int) $image[0],
-			'height'        => (int) $image[1],
-			'bytes'         => (int) $file_size,
-			'modified'      => (int) $modified,
-			'signature'     => hash( 'sha256', $signature ),
+			'size_name'             => $size_name,
+			'path'                  => $path_real,
+			'relative_path'         => $relative_path,
+			'mime_type'             => $mime,
+			'width'                 => (int) $image[0],
+			'height'                => (int) $image[1],
+			'bytes'                 => (int) $file_size,
+			'modified'              => (int) $modified,
+			'has_transparency'      => false !== $transparency,
+			'transparency_verified' => null !== $transparency,
+			'signature'             => hash( 'sha256', $signature ),
 		);
 	}
 }
